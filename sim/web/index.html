@@ -1,0 +1,68 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Arrocco simulator: the page. Everything is local: no CDN, no fonts, no trackers. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Arrocco simulator</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23d9d7cf'/%3E%3Crect width='8' height='8' fill='%232b2b2b'/%3E%3Crect x='8' y='8' width='8' height='8' fill='%232b2b2b'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="sim.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Arrocco <span>simulator</span></h1>
+      <p id="status" class="status">connecting&hellip;</p>
+    </header>
+
+    <!-- A neutral frame, not the real case: that one is Fabrizio's to design. -->
+    <section class="device" aria-label="Simulated device">
+      <div class="glass" id="glass">
+        <canvas id="panel" width="800" height="480" aria-label="E-ink panel, 800 by 480"></canvas>
+        <div id="finger" class="finger" hidden></div>
+      </div>
+    </section>
+
+    <!-- Everything below is the simulator, not the device. -->
+    <section class="strip" aria-label="Simulator controls">
+      <div class="group">
+        <span class="label">Latency</span>
+        <div class="segmented" role="radiogroup" aria-label="Latency scale">
+          <label><input type="radio" name="scale" value="1" checked><span>real</span></label>
+          <label><input type="radio" name="scale" value="0.25"><span>fast</span></label>
+          <label><input type="radio" name="scale" value="0"><span>none</span></label>
+        </div>
+      </div>
+      <div class="group">
+        <label class="check"><input type="checkbox" id="ghosting" checked> Ghosting</label>
+        <label class="check"><input type="checkbox" id="grain" checked> Grain</label>
+        <label class="check"><input type="checkbox" id="sound" checked> Buzzer</label>
+      </div>
+      <div class="group">
+        <span class="label">Battery</span>
+        <input type="range" id="battery" min="0" max="100" step="1" value="80" aria-label="Battery percent">
+        <output id="batteryValue" for="battery">80%</output>
+        <label class="check"><input type="checkbox" id="noGauge"> no gauge</label>
+        <label class="check"><input type="checkbox" id="usb"> USB plugged</label>
+      </div>
+      <div class="group">
+        <button type="button" id="screenshot">Screenshot PNG</button>
+        <button type="button" id="restart">Restart app</button>
+      </div>
+    </section>
+
+    <section class="strip readout" aria-label="Refresh counters">
+      <div class="cell"><span class="label">Panel</span><span id="busy" class="led">idle</span></div>
+      <div class="cell"><span class="label">High voltage</span><span id="hv">off</span></div>
+      <div class="cell"><span class="label">Last refresh</span><span id="last">&ndash;</span></div>
+      <div class="cell"><span class="label">Partial</span><span id="nPartial">0</span></div>
+      <div class="cell"><span class="label">Full</span><span id="nFull">0</span></div>
+      <div class="cell"><span class="label">Deep</span><span id="nDeep">0</span></div>
+      <div class="cell"><span class="label">Partial since full</span><span id="sinceFull">0</span></div>
+      <div class="cell"><span class="label">Touches ignored</span><span id="ignored">0</span></div>
+    </section>
+  </main>
+  <script src="sim.js"></script>
+</body>
+</html>
