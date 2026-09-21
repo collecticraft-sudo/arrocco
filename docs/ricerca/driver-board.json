@@ -1,0 +1,311 @@
+{
+ "summary": "SKU 114993558 is the \"ePaper Driver Board for Seeed Studio XIAO\" (shop slug \"ePaper-breakout-Board-for-XIAO-V2\", schematic \"ePAPER\" Rev 1.0, 2024-12-09). The wiki URL in the context is the right one. I read the schematic PDF as an image. The display pin map in config.h matches the schematic exactly, and D4, D5, D6, D7 and D9 are electrically free. The booster needs no setting for the GDEY075T7: RESE is fixed at 0.47 ohm, and Seeed's own 7.5\" panel is UC8179 800x480 on the same pins.\n\nThe plan is wrong or incomplete in six places:\n1. **Touch wiring.** There are no exposed male pins once the XIAO is seated. The \"IO breakout\" is two unpopulated 1x7 rows of 2.54 mm holes (CN1/CN2), and no headers ship with the board. The Dupont F-F wiring needs headers or wires soldered first. Only one 3V3 hole and one GND hole are available.\n2. **Power switch and charging.** The battery never reaches the XIAO BAT pads. The path is battery, slide switch, ETA9740 (bidirectional buck charger and 5.1 V boost), then the XIAO 5V/VBUS pin. The switch isolates only the battery. With USB plugged in, the XIAO runs regardless of the switch. The battery charges only with the switch ON. Charge current is 0.5 A, so about 9-10 h for 4000 mAh. There is no charge LED.\n3. **Battery gauge.** The board has no battery-voltage sensing at all: no divider, no ADC pin, no enable pin. The planned pin map uses every ADC1-capable header pin. The phase-4 battery gauge needs added hardware, for example a MAX17048 on the touch I2C bus.\n4. **Thickness.** 43 x 26 x 8 mm is the bare board. \"~8 mm con XIAO montato\" is wrong. I estimate 12-15 mm with the XIAO seated.\n5. **USB-C placement.** USB-C exits the short edge opposite the FPC connector, and the switch and battery jack are on the two long edges. With the display FPC folded behind the panel, USB-C points into the case. Seeed's own 7.5\" product uses an FPC extension cable to get around this.\n6. **Wake on touch.** TP_INT is on D6 = GPIO43, which is not an RTC IO (S3 RTC IOs are GPIO0-21) and is the UART0 TX pin. It cannot wake the chip from deep sleep. Swap INT to D9 and move the buzzer to D7 now, while changes are free.\n\nBattery polarity: the silk shows \"- +\", and pin 1 (triangle, BAT_4V2 in the schematic) is +. From the photo geometry this matches the Adafruit/SparkFun convention, but that is an inference. There is no reverse-polarity protection, so the multimeter check stays mandatory.\n\nOne more thing to check on arrival: boards from the January 2025 production batch gave garbled pixels on the display, a fault Seeed fixed in later batches.\n\nRelevant paths: schematic image at /Users/fabriziodrago/.claude/projects/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/tool-results/webfetch-1790014284505-d9s2fc.pdf; firmware at /private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/config.h, src/main.cpp and docs/wiring.md; recap at /Users/fabriziodrago/Downloads/RECAP-scacchiera-eink.md.",
+ "findings": [
+  {
+   "id": "DB-01",
+   "claim": "SKU 114993558 is the 'ePaper Driver Board for Seeed Studio XIAO', the V2 of the ePaper Breakout Board, and the wiki URL in the context is correct. It is a different product from the V1 'ePaper Breakout Board' and from the EE04 display board, which have different pin maps.",
+   "evidence": "Seeed shop page: 'ePaper Driver Board for Seeed Studio XIAO, SKU 114993558'. URL slug: ePaper-breakout-Board-for-XIAO-V2-p-6374. DigiKey-hosted Seeed datasheet for 114993558 shows the same board. The wiki page 'Getting Started with ePaper Driver Board' links to that shop page and gives the same pin table. V1 wiki (XIAO-eInk-Expansion-Board, shop p-5804): BUSY=D5 and no charger. EE04 (Seeed_GFX EPaper_Board_Pins_Setups.h): TFT_CS 44, TFT_DC 10, TFT_BUSY 4, TFT_RST 38, TFT_ENABLE 43, a completely different map. Schematic title block: 'ePAPER, seeedstudio, Designer Gongjun, Rev 1.0, Monday, December 09, 2024'.",
+   "sources": [
+    "https://www.seeedstudio.com/ePaper-breakout-Board-for-XIAO-V2-p-6374.html",
+    "https://wiki.seeedstudio.com/xiao_eink_expansion_board_v2/",
+    "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8932/114993558.pdf",
+    "https://wiki.seeedstudio.com/XIAO-eInk-Expansion-Board/",
+    "https://raw.githubusercontent.com/Seeed-Studio/Seeed_GFX/master/User_Setups/EPaper_Board_Pins_Setups.h",
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Keep using the xiao_eink_expansion_board_v2 wiki and the ePaper_Driver_Board.pdf schematic as references. Ignore EE04 and V1 examples, because their pins differ."
+  },
+  {
+   "id": "DB-02",
+   "claim": "The schematic routes only six XIAO signals to the display: RST=D0, CS=D1, BUSY=D2, DC=D3, SCK=D8, MOSI=D10. The board touches no other XIAO GPIO. D4, D5, D6, D7 and D9 go only to the breakout holes, so the planned pin map is electrically valid.",
+   "evidence": "Schematic nets on CN_DISPLAY: pin 9 A2_D2_BUSY, pin 10 A0_D0_RST, pin 11 A3_D3_DC, pin 12 A1_D1_CS, pin 13 A8_D8_SCK, pin 14 A10_D10_MOSI. Pin 8 (BS1) goes to GND, which selects 4-wire SPI. No MISO net reaches the panel. XIAO socket CN4 is wired 1:1 to CN1 (A0_D0_RST, A1_D1_CS, A2_D2_BUSY, A3_D3_DC, A4_D4_SDA, A5_D5_SCL, A6_D6_TX) and to CN2 (A7_D7_RX, A8_D8_SCK, A9_D9_MISO, A10_D10_MOSI, 3V3, GND, VDD_5V). The only other circuitry is the ETA9740 on VDD_5V and the booster on 3V3. The wiki table gives the same mapping. Seeed_GFX defines TFT_MISO D9 for this board, but the schematic shows D9 is not connected to the FPC.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+    "https://wiki.seeedstudio.com/xiao_eink_expansion_board_v2/",
+    "https://raw.githubusercontent.com/Seeed-Studio/Seeed_GFX/master/User_Setups/EPaper_Board_Pins_Setups.h"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Leave the display pins in config.h unchanged. Treat the 5 free pins plus 5V, 3V3 and GND on CN1/CN2 as the whole I/O budget reachable without soldering to the XIAO's underside pads."
+  },
+  {
+   "id": "DB-03",
+   "claim": "Dupont wires cannot be plugged onto the XIAO once it is seated. The only access to D4, D5, D6, D7, D9, 3V3 and GND is two unpopulated 1x7 rows of 2.54 mm through-holes (CN1/CN2) just outside the female socket. No headers are included, so soldering is mandatory. There is one 3V3 hole and one GND hole.",
+   "evidence": "Seeed overview.png and headimage.jpg show CN1 and CN2 as empty gold-plated holes beside the two 7-pin female sockets. Part list on the shop page and datasheet: 'ePaper Driver Board x1'. The shop upsells '7-Pin Male Header for Seeed Studio XIAO (5 pcs) $0.2'. Spec: 'Female Header 7 Pin 2.54mm'. Back silk, from datasheet Fig. 3, labels the holes. Column A reads '5V, GND, 3V3, MOSI, D9, SCK, D7' and column B reads 'RST, CS, BUSY, DC, D4, D5, D6'. Both columns start at the USB end. Seeed feature text: 'integrates with the XIAO series(Pre-Soldering Version)'. wiring.md and the recap say '6 Dupont dal header FTS02 al XIAO' using 'cavetti Dupont F-F', which assumes exposed male pins that do not exist.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/eInk/xiao-expansion/overview.png",
+    "https://files.seeedstudio.com/wiki/eInk/xiao-expansion/headimage.jpg",
+    "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8932/114993558.pdf",
+    "https://www.seeedstudio.com/ePaper-breakout-Board-for-XIAO-V2-p-6374.html",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/docs/wiring.md"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Add two 1x7 2.54 mm male headers to the BOM. Right-angle headers, or straight headers soldered from the back, keep the case thin. Solder them into CN1 and CN2, and the planned F-F Dupont wiring then works. Alternatively solder the 7 wires directly into the holes. Plan a GND split, because touch GND and buzzer GND share the single GND hole; the FTS02 header or the back '-' BAT pad can serve as a second ground point. Update wiring.md and the MakerWorld instructions to say the build requires soldering.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Claim stands.\n\n- D4, D5, D6, D7, D9, 3V3 and GND are reachable only on the two unpopulated 1x7 2.54 mm through-hole rows CN1/CN2, which sit 2.54 mm outboard of the SMD female sockets.\n- There is one 3V3 hole and one GND hole. No headers are in the box.\n- Soldering is required.\n\nFor a thin case, solder wires directly into CN1/CN2, or use right-angle pins. Vertical headers with Dupont housings add about 14 mm of height and graze the XIAO edge.",
+    "reasoning": "I read the primary sources myself.\n\n- **Holes and sockets.** Seeed overview.png, enlarged 4x in the browser, shows two black SMD 7-pin female sockets. Just outboard of each is a row of 7 empty gold through-holes with silk 'CN1' (top) and 'CN2' (bottom). CN1 has a square pin-1 pad at the end far from the FPC. CN2 has its square pad at the FPC end.\n- **Pin nets.** The schematic ePaper_Driver_Board.pdf (rev 1.0, 2024-12-09) gives:\n  - CN1 (CN_SIP7) pins 1-7 = A0_D0_RST, A1_D1_CS, A2_D2_BUSY, A3_D3_DC, A4_D4_SDA, A5_D5_SCL, A6_D6_TX.\n  - CN2 pins 7-1 = VDD_5V, GND, 3V3, A10_D10_MOSI, A9_D9_MISO, A8_D8_SCK, A7_D7_RX.\n  - CN4 is the 14-pin XIAO socket on the same nets.\n  - There is exactly one 3V3 pin and one GND pin.\n- **What ships.** The Digi-Key-hosted Seeed datasheet (114993558.pdf) has 'Part List: ePaper Driver Board x1' and spec 'Female Header: 7 Pin 2.54mm'. Its feature text reads 'Seamlessly integrates with the XIAO series(Pre-Soldering Version)'. Fig. 3 back silk reads '5V GND 3V3 MOSI D9 SCK D7' and 'RST CS BUSY DC D4 D5 D6'.\n- **Shop page.** The live page lists '7-Pin Male Header for Seeed Studio XIAO (5 pcs) $0.2' as an add-on.\n- **wiring.md** does say '6 fili Dupont F-F ... Dal header del FTS02 al XIAO'. A seated XIAO has no exposed male pins, so that cannot work as written.\n\nI could not refute it.\n\nAdded caveat (my inference from the geometry): the XIAO PCB is 17.8 mm wide on 15.24 mm pin rows. It overhangs the socket pin centres by about 1.3 mm, and the CN holes are only 2.54 mm out. A vertical header fitted with a Dupont housing (2.54 mm wide, about 14 mm tall) therefore just grazes the XIAO edge and adds about 14 mm of height.",
+    "sources": [
+     "https://files.seeedstudio.com/wiki/eInk/xiao-expansion/overview.png",
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+     "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8932/114993558.pdf",
+     "https://www.seeedstudio.com/ePaper-breakout-Board-for-XIAO-V2-p-6374.html",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/docs/wiring.md"
+    ]
+   }
+  },
+  {
+   "id": "DB-04",
+   "claim": "The power path is battery, slide switch, ETA9740 (bidirectional buck charger and 5.1 V boost), then the XIAO 5V/VBUS pin. The XIAO BAT pads and its own charger are unused. The switch isolates only the battery. With USB connected the XIAO runs whatever the switch position. The battery charges only with the switch ON. There is no charge indicator.",
+   "evidence": "Schematic: CN5 (CN_BAT) pin 1 is BAT_4V2. BAT_4V2 goes to CN6 (MSK12C02-SZ 'Power switch') pin 1, and switch pin 2 goes to U1 ETA9740E8A BAT (pin 6), with L2 1 uH to SW. U1 OUT (pin 7) goes to VDD_5V, which is XIAO socket pin 14 (5V). LED1/2/3 pins are marked no-connect. ETA9740 datasheet: 'Bi-Directional Power conversion with Single Inductor', 'Automatic Mode Switching', boost 'Output Voltage Range 5.05/5.1/5.15 V', 'Quiescent Current At BATT Vbat=3.6V 80 uA', 'BATT Ok Threshold Rising, HYS=0.4V: 3.2 V'. Shop spec: 'Switch: Battery Power ON/OFF'. XIAO ESP32S3 wiki: the 5V pin is the USB 5 V rail; the on-board charger is 100 mA and its red LED 'turns off after 30 seconds' with no battery. wiring.md says 'Interruttore della driver board = accensione generale', which is true only on battery.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+    "https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1124/A090-V11_ETA9740.pdf",
+    "https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/",
+    "https://www.seeedstudio.com/ePaper-breakout-Board-for-XIAO-V2-p-6374.html"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Document the behaviour: 'switch ON to charge; with USB plugged in the board is always on'. Never wire the LiPo to the XIAO BAT pads as well, because that bypasses the switch and puts two chargers on one cell. Expect the XIAO red CHG LED to light for about 30 s at each battery power-up. Firmware cannot know whether the cell is charging, so add an on-screen hint instead. 5 V at up to 2.4 A is available on the '5V' breakout hole even on battery.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "**Power path**\n- LiPo, then CN6 slide switch (MSK12C02, SPDT, third pin no-connect), then ETA9740E8A BAT pin.\n- The ETA9740 is a single-inductor bidirectional part: about 0.5 A buck charger (R5 360k, 200 mA termination) and 5.1 V boost.\n- Its OUT pin is VDD_5V, which is the XIAO 5V pin. On the S3 Plus that pin is wired straight to USB VBUS.\n- The XIAO BAT pads and its roughly 110 mA charger are unused.\n\n**Behaviour**\n- The switch isolates only the cell.\n- With USB plugged in, the XIAO runs in either switch position.\n- The cell charges only with the switch ON. A 4000 mAh cell takes about 9-10 h at 0.5 A.\n- There is no charge LED and no status net. LED1-3 are no-connect.\n- The boost shuts down at about 2.8 V (3.2 V rising, 0.4 V hysteresis). It draws about 80 uA quiescent.\n\n**Do not rely on** '2.4 A on the 5V hole'. The series slide switch is rated 50 mA by LCSC, so treat the 5V hole as XIAO-only.",
+    "reasoning": "I traced the schematic and the datasheets myself and could not refute the power-path description. One sentence of the recommended action is unsafe.\n\n**Schematic, traced myself**\n- CN5 CN_BAT pin 1 is BAT_4V2, with C24 22uF directly across the connector.\n- BAT_4V2 goes to CN6 'CN_MSK12CO2-SZ Power switch' pin 1. Pin 3 is X (no-connect).\n- Switch pin 2 goes to U1 ETA9740E8A pin 6 BAT, with C17/C18. L2 1uH runs to pin 1 SW.\n- Pin 7 OUT is VDD_5V, which feeds CN4 pin 14 and CN2 pin 7.\n- LED1/LED2/LED3 (pins 2/3/4) are all marked X.\n- ISET has R5 360K. Schematic notes read 'Charging current = 0.5A' and 'BAT: 4.2V 1000mAH'.\n\n**ETA9740 datasheet (read via alldatasheet; the m5stack URL refused the connection)**\n- 'Bi-Directional Power conversion with Single Inductor', 'Automatic Mode Switching'.\n- Boost 'Output Voltage Range 5.05/5.1/5.15 V'. 'Quiescent Current At BATT Vbat=3.6V 80 uA'.\n- 'BATT Ok Threshold Rising, HYS=0.4V 3.2 V'. USB UVLO 4.5 V rising.\n- Riset 56K gives 3 A and 91K gives 2 A, so 360K gives about 0.5 A. 'Charge Termination Current 200 mA'.\n\n**XIAO ESP32S3 Plus schematic V1.1**\n- U2 pad 14 is VBUS, so the 5V pin is the USB rail with no diode.\n- The on-board charger is U4 SGM40567 'ICharge=24000/220K=110mA'. It sits on the XIAO's own BAT pads, which the socket never touches.\n- The 3V3 rail is an SGM6029 buck. It is fed from VBUS through Schottky D2.\n\n**Consequences of that topology**\n- The switch isolates only the cell.\n- USB powers the XIAO in any switch position.\n- Charging needs the switch ON.\n- There is no charge or status signal.\n\n**Corrections**\n- '5 V at up to 2.4 A is available on the 5V hole' is only the IC's rating. All battery current flows through CN6 MSK12C02, which LCSC lists at 'Rated Current 50mA, 12V'. Seeed already runs about 0.5 A through it. Do not plan extra 5 V loads on this board.\n- The '30 s red LED at each battery power-up' is my inference from the wiki sentence about no-battery behaviour, not a measurement.\n- The datasheet has no functional description of light-load behaviour. That the boost stays up in deep sleep I infer from Seeed's own 7.5\" panel using this board with deep sleep.\n- On battery, the 5.1 V boost back-feeds the USB-C VBUS pin.",
+    "sources": [
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+     "https://www.alldatasheet.com/html-pdf/1769250/ETA/ETA9740/131/2/ETA9740.html",
+     "https://www.alldatasheet.com/html-pdf/1769250/ETA/ETA9740/62/1/ETA9740.html",
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf",
+     "https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/",
+     "https://www.lcsc.com/product-detail/C431540.html",
+     "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8932/114993558.pdf"
+    ]
+   }
+  },
+  {
+   "id": "DB-05",
+   "claim": "Charge current is fixed at about 0.5 A, so the 4000 mAh cell needs about 9-10 h for a full charge. The schematic was annotated for a 1000 mAh cell.",
+   "evidence": "Schematic: R5 'ISET 360K_1%', with the notes 'Charging current = 0.5A' and 'BAT: 4.2V 1000mAH'. ETA9740 datasheet: 'Fast Charge Current Riset=56K: 3 A; Riset=91K: 2 A', which gives I of about 170-180 k-ohm-A divided by R, so 360K gives about 0.47-0.5 A. 'Charge Termination Current 200 mA', 'Pre-Condition Charge Current 200 mA', 'Battery CV Voltage 4.17/4.21/4.25 V'. At 0.5 A, 4000 mAh takes about 8 h of constant current plus the CV tail.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+    "https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1124/A090-V11_ETA9740.pdf"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Accept overnight charging and say so in the MakerWorld description. Alternatively choose a smaller or thinner cell; a 407090 of about 2500 mAh charges in about 5-6 h and saves 2 mm. Replacing R5 with about 180K for 1 A is possible but is fine SMD rework, which is not suitable for a replicable kit."
+  },
+  {
+   "id": "DB-06",
+   "claim": "The driver board has no battery-voltage sensing at all: no divider, no ADC net, no enable pin. The ETA9740 fuel-gauge LED pins are not connected. The planned pin map uses every ADC1-capable header pin. The roadmap phase-4 'battery gauge' cannot be done without added hardware.",
+   "evidence": "The schematic has no resistor divider on BAT_4V2 and no net from the battery to any XIAO pin. U1 LED1, LED2 and LED3 are marked X. Seeed forum thread 'XIAO 7.5\" ePaper Panel - Battery Status?' (PJ_Glasso): 'You will not see battery voltage unless their firmware explicitly uses an external voltage divider into an analog pin'. User flexy2dd 'soldered the resistors directly onto the battery terminals under the driver board' and ran a wire to GPIO6. User Worfje used an LC709203F on I2C. cniweb ESPHome repo: 'herstellerseitig keinen ADC-Spannungsteiler verdrahtet'. ESP32-S3 ADC1 is GPIO1-10; the plan uses GPIO1-4, 7 and 9 for the display, 5 and 6 for I2C, and 8 for the buzzer. D6 and D7 (GPIO43/44) have no ADC. The XIAO S3 Plus variant defines 'ADC_BAT = 10', but that is tied to the XIAO's own BAT pad, which this board leaves unconnected. Schematic H1/H2 are DNP pads on BAT_4V2 and GND, the silk '+ -' BAT pads on the back, connected ahead of the switch.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+    "https://forum.seeedstudio.com/t/seeed-studio-xiao-7-5-epaper-panel-battery-status/292932",
+    "https://github.com/cniweb/ESPHome-XIAO-7.5-ePaper-Panel",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Decide now. Option (a): add a MAX17048 or LC709203F I2C fuel-gauge breakout on the touch I2C bus (address 0x36 or 0x0B, no clash with 0x5D/0x14). Its cell pins go to the back '+/-' BAT pads, and it needs no extra GPIO. Option (b): fit a 2x470k divider plus 100 nF from the '+' pad to an ADC1 pin freed by remapping. Option (c): ship without a gauge and accept a silent brown-out at about 2.8 V; the ETA9740 boost cut-off is 3.2 V rising minus 0.4 V hysteresis. Option (a) keeps the pin budget intact.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "The driver board has no battery sensing: no divider, no ADC net, and the ETA9740 LED pins are no-connect. The planned map uses all nine ADC1-capable header pins (GPIO1-9). Phase-4 'battery gauge' therefore needs added hardware.\n\nThe XIAO S3 Plus does expose a free ADC1 pin off the header. GPIO10 (D16 / 'ADC_BAT', ADC1_CH9) is an unconnected pad with no on-board divider, per the Plus schematic V1.1.\n\n**Options**\n- (a) An I2C fuel gauge on the touch bus: MAX17048 at 0x36 or LC709203F at 0x0B.\n- (b) A 2-resistor divider plus 100 nF from the back '+' BAT pad (H1, ahead of the switch) to the D16/GPIO10 pad. No header remap is needed. Because H1 is ahead of the switch, this divider drains the cell even with the switch OFF, so use at least 1 M total.\n- (c) No gauge. The boost dies silently at about 2.8 V.",
+    "reasoning": "The core claim holds. One detail is wrong in a way that helps the design.\n\n**Core claim, confirmed**\n- I read the driver-board schematic. BAT_4V2 touches only CN5 pin 1, C24, the DNP pads H1/H2 and CN6 pin 1. No resistor divider and no net from the battery to any CN1/CN2/CN4 pin exists. U1 LED1/2/3 are X.\n- Seeed forum thread 292932 confirms it. PJ_Glasso: 'You will not see battery voltage unless their firmware explicitly uses an external voltage divider'. flexy2dd: 'I soldered the resistors directly onto the battery terminals under the driver board'. Worfje used an LC709203F.\n- The cniweb repo says 'herstellerseitig keinen ADC-Spannungsteiler verdrahtet'.\n- Local adc_channel.h gives ADC1 = GPIO1-10. The Espressif GPIO table shows GPIO43/44 with no ADC and no RTC function.\n- The plan consumes GPIO1-9, so every ADC-capable header pin is in use.\n\n**Correction**\nThe researcher says ADC_BAT=10 'is tied to the XIAO's own BAT pad'. The XIAO ESP32S3 Plus schematic V1.1 shows otherwise.\n- I checked it by image and by pdftotext. Net 'IO10/XMCLK/ADC_BAT' goes only to the MCU pin, U2 pad 20 and B2B J3 pin 6.\n- The only resistors on the board are R1/R2 5.1K, R3/R4 22R, R7/R8/R11 10K, R9 100K, R10 220K, R13 249K and R15 1.5K. None is a VBAT divider.\n- So on the Plus, GPIO10 (variant D16, ADC1_CH9, also RTC-capable) is a free, unconnected ADC1 pad that is merely named ADC_BAT.\n- Option (b) therefore needs no remap of header pins.\n\nIt is still added hardware, so the 'battery gauge needs extra parts' conclusion stands.",
+    "sources": [
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf",
+     "https://forum.seeedstudio.com/t/seeed-studio-xiao-7-5-epaper-panel-battery-status/292932",
+     "https://github.com/cniweb/ESPHome-XIAO-7.5-ePaper-Panel",
+     "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/gpio.html",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/adc_channel.h"
+    ]
+   }
+  },
+  {
+   "id": "DB-07",
+   "claim": "The battery connector is a 2-pin JST 2.0 mm side-entry header (PH type). Silk shows '- +', and pin 1 (triangle, BAT_4V2 in the schematic) is +. From the photo geometry the socket follows the Adafruit/SparkFun polarity, with red on the right when you look at the plug's mating face with its ribs up. The schematic shows no reverse-polarity protection.",
+   "evidence": "Spec table: 'Battery Connector: JST 2.0mm'. Schematic CN5: pin 1 BAT_4V2, pin 2 GND, with C24 22 uF directly across it and no series FET or diode. BAT_4V2 runs through the switch to the ETA9740 BAT pin, which has an absolute maximum of -0.3 V. Zoomed overview.png: the header mouth faces the semicircular board notch, the rib windows are on top, a white pin-1 triangle sits beside the right-hand solder tail, and the silk reads '-' under the left tail and '+' under the right. DigiKey forum: on Adafruit/SparkFun cells, looking at the mating face of the wire connector with the polarizing bump on top, 'the positive red wire will be on the right'. 'Adafruit and Sparkfun are consistent', and there is no official standard. The mapping from photo to convention is my geometric inference, not a Seeed statement.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/eInk/xiao-expansion/overview.png",
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+    "https://forum.digikey.com/t/polarity-standard-for-jst-ph-connectors-on-lipo-batteries/64548",
+    "https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1124/A090-V11_ETA9740.pdf"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Keep the recap's 'tester first' rule and treat it as mandatory, because a reversed cell will likely destroy the ETA9740. Probe the battery plug itself before plugging it in. As a second check, plug in with the switch OFF and measure across the back '+/-' BAT pads before sliding to ON. If the polarity is reversed, swap the two crimp contacts in the PHR-2 housing by lifting each tab with a needle. Print a polarity pictogram in the MakerWorld guide.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Claim stands at medium confidence.\n\n- The battery connector is a 2-pin 2.0 mm side-entry header (PH-style). Pin 1 (triangle, BAT_4V2) is '+', on the right-hand tail under the '- +' silk.\n- That corresponds to the Adafruit/SparkFun convention. This is a geometric inference from the photo, not a Seeed statement.\n- There is no reverse-polarity protection. The cell reaches the ETA9740 BAT pin (absolute maximum -0.3 V) through the slide switch only.\n- C24 22 uF sits across the connector ahead of the switch.\n\nMeter the battery plug before first insertion. That step is mandatory. The switch-OFF back-pad measurement is only a second check.",
+    "reasoning": "The directly readable facts check out. My own derivation of the polarity convention agrees with the researcher's.\n\n**Read directly**\n- Datasheet spec table: 'Battery Connector: JST 2.0mm'.\n- Schematic: CN5 pin 1 = BAT_4V2, pin 2 = GND, pins 3/4 (shell) = GND. C24 22uF/10V sits directly across the connector. Nothing but the slide switch lies between BAT_4V2 and U1 BAT pin 6. No FET, diode or fuse.\n- ETA9740 absolute maximum: 'All Other Pin Voltage -0.3V to 6V'.\n- overview.png at 4x: a side-entry 2-pin header whose mouth faces the semicircular notch. Two rib slots are visible on its top face. Solder tails point toward the board centre. A white pin-1 triangle sits beside the right tail. Silk reads '-' under the left tail and '+' under the right tail. That matches pin 1 = BAT_4V2.\n\n**Geometry, recomputed independently**\n- The plug enters from the notch side with its ribs facing away from the PCB. Its right-hand contact, as seen in the photo, lands on '+'.\n- Viewed at the plug's mating face with ribs up, '+' is therefore on the right.\n- The DigiKey forum post describes this as the Adafruit/SparkFun convention: bump on top, 'the positive red wire will be on the right', and 'no idea if there is an official standard'.\n\n**Caveats**\n- The mapping assumes the plug ribs go into the top slots. That is standard for a side-entry PH header, but it is not stated by Seeed.\n- The ordered cell is from an AliExpress vendor and its polarity is unknown.\n- C24 stays across the connector even with the switch OFF. From the photo it looks like an MLCC. The only tantalum, 'C226', is next to U1. That is an inference. So measuring the plug before insertion is the only zero-risk check. The 'switch OFF, probe the back pads' step is a secondary check.",
+    "sources": [
+     "https://files.seeedstudio.com/wiki/eInk/xiao-expansion/overview.png",
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+     "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8932/114993558.pdf",
+     "https://forum.digikey.com/t/polarity-standard-for-jst-ph-connectors-on-lipo-batteries/64548",
+     "https://www.alldatasheet.com/html-pdf/1769250/ETA/ETA9740/131/2/ETA9740.html"
+    ]
+   }
+  },
+  {
+   "id": "DB-08",
+   "claim": "The 24-pin FPC and booster circuit are the standard Good Display reference design with a fixed RESE of 0.47 ohm, which is what the GDEY075T7 (UC8179) needs. There are no jumpers or switches to set. The connector is 0.5 mm top-contact.",
+   "evidence": "Schematic: Q1 Si1304BDL, L1 10 uH, D1/D2/D5 B0540WS, R2 '0R47_1%' from the MOSFET source (RESE, FPC pin 3) to GND, R1 10K gate pull-down (GDR, FPC pin 2), VDDIO/VCI on FPC pins 15/16 at 3V3, BS1 (pin 8) to GND, FB1 plus CT1 220 uF on the 3V3 feed. Spec: 'FPC 24 Pin 0.5mm Top Contact'. Seeed lists '7.5-inch (800x480)' as supported. Seeed_GFX Setup502_Seeed_XIAO_EPaper_7inch5.h: '#define UC8179_DRIVER', TFT_WIDTH 800, TFT_HEIGHT 480, on the same D-pins. For Good Display's own DESPI-C02 adapter the documented setting for the GDEY075T7 is RESE = 0.47 (search-result summary and Arduino forum threads; I did not open the Good Display page itself). Firmware already uses GxEPD2_750_GDEY075T7.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+    "https://raw.githubusercontent.com/Seeed-Studio/Seeed_GFX/master/User_Setups/Setup502_Seeed_XIAO_EPaper_7inch5.h",
+    "https://wiki.seeedstudio.com/xiao_eink_expansion_board_v2/",
+    "https://forum.arduino.cc/t/goodisplay-gdey075t7-with-gxepd2-esp32-how-to-get-it-to-run/1355813"
+   ],
+   "confidence": "medium",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "No hardware setting is needed. On arrival, check which face of the GDEY075T7-T01 FPC tail carries the gold fingers. They must face up, away from the driver-board PCB. This decides which side of the driver board faces the display back, so freeze the case geometry only after that check."
+  },
+  {
+   "id": "DB-09",
+   "claim": "The early V2 production batch MOA250113001 (January 2025) gave garbled pixels, and the 3/09/25 batch MOA250210012 fixed it. The board was bought from a third-party AliExpress store, so old stock is possible.",
+   "evidence": "Seeed forum, user absolutk, March 2025, display used: 1.54\" GDEY0154D67: 'Since all 6 V2 boards in my possession behave the same way, this appears to be a hardware issue with the V2 board.' and 'Old, faulty batch: MOA250113001, Prod date: 1/20/25. New, fixed batch: MOA250210012, Prod date: 3/09/25'. Symptoms were 'scattered dots' and static noise on full-black screens. No root cause was published. The recap lists the seller as 'TeXAS INSTRUMENTS Store'.",
+   "sources": [
+    "https://forum.seeedstudio.com/t/epaper-driver-board-for-seeed-studio-xiao/288004",
+    "/Users/fabriziodrago/Downloads/RECAP-scacchiera-eink.md"
+   ],
+   "confidence": "medium",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Check the batch and date on the bag label when the board arrives. Make the first bring-up test a full-black and a full-white refresh. If static-like noise appears, suspect the board rather than the firmware and ask for a replacement."
+  },
+  {
+   "id": "DB-10",
+   "claim": "The board is 43 x 26 mm, and the 8 mm height is the bare board without the XIAO. The recap's '~8 mm con XIAO montato' is wrong. With a header-soldered XIAO in the socket the stack is roughly 12-15 mm (my estimate). This breaks the 15-16 mm total-thickness target if the board sits behind the display.",
+   "evidence": "Seeed headimage.jpg dimension arrows read '43 mm', '26 mm' and '8 mm' on a board photographed without a XIAO; the 8 mm arrow spans the PCB plus the female socket. Add a XIAO PCB of about 1 mm, its shield and USB-C at about 3.2 mm, and up to 2.5 mm for the plastic spacer of pre-soldered male headers. Shop review of 2026-07-29: 'If you design for minimal space don't use the \"soldered\" version of the ESP board. The distance between this board and the ESP board gets very wide due to the connectors... place the ESP board directly on top of the display board connectors, then push the pins thru the ESP board, solder the pins and cut off the waste.' Recap lines 42-45: 'Driver board 43 x 26 mm, ~8 mm con XIAO montato ... Spessore totale realistico 15-16 mm'.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/eInk/xiao-expansion/headimage.jpg",
+    "https://www.seeedstudio.com/ePaper-breakout-Board-for-XIAO-V2-p-6374.html",
+    "/Users/fabriziodrago/Downloads/RECAP-scacchiera-eink.md"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Budget about 13-15 mm for the electronics bay and measure on arrival. To save about 2.5 mm, buy or keep the XIAO unsoldered and use the reviewer's trick of seating the pins in the socket and soldering with the XIAO PCB resting on the socket top. Alternatively place the board in a 'chin' beside the display instead of behind it; the 6 mm battery is then the thickest part behind the panel.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "The board is 43 x 26 mm. Seeed's 8 mm figure is the bare board, PCB plus sockets, with no XIAO fitted. So the recap's '~8 mm con XIAO montato' is wrong.\n\nEstimated stack:\n- about 14.7 mm with a pre-soldered XIAO, including the 2.5 mm header spacer;\n- about 12.2 mm if the XIAO is soldered flush onto the socket tops.\n\nThe 15-16 mm total is not reachable with the board behind the panel. It is reachable only with a chin layout combined with the flush-mount trick. Measure on arrival.",
+    "reasoning": "**What the photo shows**\nheadimage.jpg, viewed myself, has dimension arrows '43 mm', '26 mm' and '8 mm'. The board is bare: the female sockets are empty and no XIAO is fitted. So 8 mm is the PCB plus its tallest part, without the MCU.\n\n**What the recap says**\n- Recap line 42 really does say 'Driver board 43 × 26 mm, ~8 mm con XIAO montato'.\n- Line 45 says 'Spessore totale realistico 15–16 mm'.\n\n**The review**\nThe shop review is real. It is dated July 29, 2026 and reads: 'If you design for minimal space don't use the \"soldered\" version of the ESP board. The distance between this board and the ESP board gets very wide due to the connectors... place the ESP board directly on top of the display board connectors, then push the pins thru the ESP board, solder the pins and cut off the waste.'\n\n**My own stack estimate (inference)**\n- 8 mm board to socket top, plus 2.5 mm male-header plastic, plus about 1.0 mm XIAO PCB, plus 3.2 mm USB-C shell. Total about 14.7 mm.\n- With the reviewer's flush-mount trick it is about 12.2 mm.\n- Behind a 2.13 mm panel, with an air gap and a rear wall, that is 19 mm or more. The 15-16 mm target fails.\n\n**One caveat on the recommendation**\nA chin layout does not fix thickness by itself. The chin still needs about 14.7 mm plus two walls, roughly 18 mm, unless the XIAO is flush-mounted (about 12.2 mm plus walls, roughly 15 mm). Dupont housings, if used, are about 14 mm long and must lie flat.",
+    "sources": [
+     "https://files.seeedstudio.com/wiki/eInk/xiao-expansion/headimage.jpg",
+     "https://www.seeedstudio.com/ePaper-breakout-Board-for-XIAO-V2-p-6374.html",
+     "/Users/fabriziodrago/Downloads/RECAP-scacchiera-eink.md"
+    ]
+   }
+  },
+  {
+   "id": "DB-11",
+   "claim": "The USB-C of the seated XIAO exits the short edge opposite the FPC connector. The slide switch protrudes from one long edge at the FPC half of the board. The JST battery jack opens towards the other long edge, through a semicircular notch. There are four mounting holes of about M2, none at the XIAO end. If the display FPC is folded straight behind the panel, USB-C points into the case. Seeed's own 7.5\" product solves this with an FPC extension cable.",
+   "evidence": "Schematic and silk: CN1 pin 1 (square pad) is D0 and CN2 pin 7 is VDD_5V, both at the board end farthest from the FPC connector. On a XIAO, D0 and 5V flank the USB-C, so USB-C faces that short edge. overview.png: the FPC connector is on the left short edge with its mouth outward. The BAT header is on the top long edge, opening into the notch. The 'ON/OFF' slide switch is on the bottom long edge, left half. Holes are at both left corners and two mid-board; by pixel scaling they are about 18 mm by 22 mm apart and about 2.2 mm in diameter. That is an estimate from the photo, not a drawing. Seeed wiki image 208.jpg for the XIAO 7.5\" ePaper Panel labels 'FPC extension cable & FPC connectors' between the display and the 'ePaper Driver Board', with the board in a bottom corner. wiring.md says 'USB-C verso l'esterno, verso il bordo con l'interruttore', but the switch is on a perpendicular edge, not the USB edge.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/eInk/xiao-expansion/overview.png",
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/208.jpg",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/docs/wiring.md"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Pick the case layout before modelling. Option (a): a chin layout with the FPC running straight to the board and USB-C on the bottom wall. Option (b): add a 24-pin 0.5 mm FPC extension (coupler plus FFC; mind same-side versus opposite-side contacts for the top-contact socket) and put the board in a corner, so USB-C sits on one wall and the switch on the adjacent wall, as Seeed does. Option (c): use a short USB-C panel-mount pigtail. Fix the wiring.md orientation rule to read: 'USB-C at the end opposite the FPC connector, over the 5V/RST silk end'. The socket is not keyed, and a XIAO inserted rotated 180 degrees puts 5 V on the wrong pins. Measure the hole positions with calipers, because no drawing or STEP of the board is published.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Claim stands.\n\n- USB-C exits the short edge opposite the FPC connector, at the 5V/RST silk end.\n- The switch is on one long edge in the FPC half. The JST opens to the other long edge through the notch.\n- There are 4 holes of about M2: the two FPC-end corners and two mid-board, none at the XIAO end. Spacing is roughly 17-18 x 21-22 mm from photos only, so measure it.\n- With the FPC folded straight behind the panel, USB-C points inward. Seeed's own 7.5\" product uses an FPC extension and a corner placement.\n- wiring.md's 'USB-C verso il bordo con l'interruttore' is wrong.\n- The socket is unkeyed. A 180-degree-rotated XIAO puts 5.1 V on GPIO43.",
+    "reasoning": "**USB-C direction**\n- Pin-1 geometry, checked myself: in overview.png the CN1 square pad is at the end far from the FPC. CN1 pin 1 = A0_D0_RST. CN2's square pad is at the FPC end, so CN2 pin 7 = VDD_5V is at the far end. Datasheet Fig. 3 back silk starts both columns with '5V' and 'RST' at that same end.\n- On a XIAO, D0 and 5V flank the USB-C. So USB-C exits the short edge opposite the FPC connector.\n- Extra primary confirmation I found: Seeed's connect_xiao.gif on the same wiki page shows a XIAO seated with USB-C at the end opposite the FPC. It uses the V1 board, which has the same socket orientation.\n\n**Other features in the photo**\n- The FPC connector is on the left short edge, mouth outward.\n- The JST mouth opens into the semicircular notch on one long edge.\n- The 'ON/OFF' slide switch protrudes from the opposite long edge, in the FPC half.\n- There are four holes: the two FPC-end corners and two mid-board. None is at the XIAO end.\n\n**Hole spacing**\nMy pixel scaling gives about 17 x 21 mm hole pitch and about 2.2 mm diameter. The researcher got 18 x 22. The two estimates disagree by about 1 mm. No drawing exists, so calipers are required.\n\n**Extension cable**\n208.jpg really labels 'FPC extension cable & FPC connectors' between the panel and the 'ePaper Driver Board'. The board sits in a bottom corner.\n\n**wiring.md**\nIt says 'USB-C verso l'esterno, verso il bordo con l'interruttore'. The switch is on a long edge, perpendicular to the USB edge, so that sentence is wrong.\n\n**Rotated XIAO (my inference from the schematic)**\nA XIAO inserted rotated 180 degrees lands VDD_5V (5.1 V) on XIAO pin 7 (D6/GPIO43), and GND and 3V3 on D5 and D4.\n\n**Unverified**\nWhich face the GDEY075T7 FPC contacts are on. The socket is top-contact, so this decides whether a folded-back FPC can mate without an extension or a flipped board.",
+    "sources": [
+     "https://files.seeedstudio.com/wiki/eInk/xiao-expansion/overview.png",
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+     "https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/8932/114993558.pdf",
+     "https://files.seeedstudio.com/wiki/eInk/xiao-expansion/connect_xiao.gif",
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/208.jpg",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/docs/wiring.md"
+    ]
+   }
+  },
+  {
+   "id": "DB-12",
+   "claim": "TP_INT on D6 (GPIO43) cannot wake the ESP32-S3 from deep sleep, and GPIO43 is the UART0 TX pin, which carries the ROM boot log. The only RTC-capable free header pins are D4, D5 and D9. Deep sleep with wake-on-touch (roadmap phase 4) needs a remap, which costs nothing now.",
+   "evidence": "Local IDF header for esp32s3, soc_caps.h: '#define SOC_RTCIO_PIN_COUNT 22', meaning RTC IOs are GPIO0-21. ext0/ext1 deep-sleep wake works only on RTC IOs, so GPIO43/44 are excluded. XIAO S3 Plus variant: 'TX = 43, RX = 44', 'D6 = 43, D7 = 44', 'D9 = 8'. config.h: TP_INT 43, TP_RST 44, BUZZER_PIN 8. The BOM has no button, so touch INT or a timer are the only possible wake sources. Side note checked in the core 3.3.8 source (esp32-hal-spi.c spiDetachBus): calling tone() on GPIO8 after SPI.begin(SCK, MISO=8, ...) detaches only MISO and keeps the bus running, because the condition 'sck == -1 || (miso == -1 && mosi == -1)' is false. The current code works, but passing MISO = -1 is cleaner.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/soc_caps.h",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.c",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/config.h"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Remap before wiring. Keep SDA on D4 (GPIO5) and SCL on D5 (GPIO6). Move TP_INT to D9 (GPIO8, RTC-capable, ext0/ext1 wake). Put TP_RST on D6 (GPIO43); boot-log wiggle on the reset line is harmless because the firmware re-runs the reset sequence. Put the buzzer on D7 (GPIO44, RX, silent at boot). Call SPI.begin(EPD_SCK, -1, EPD_MOSI, -1). Wake-on-touch also requires the GT911 to stay powered in a scanning mode, which is about mA-level standby current; verify that in the touch thread.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Claim stands.\n\n- GPIO43 (D6) is U0TXD. It is not an RTC IO (RTC IOs are GPIO0-21), so it cannot be an ext0/ext1 deep-sleep wake source. It could wake light sleep only.\n- The free RTC-capable header pins are D4, D5 and D9. On the Plus, back pads D16-D19 (GPIO10-13) are RTC-capable as well.\n\n**Remap before wiring**\n- TP_INT to D9/GPIO8.\n- TP_RST to D6/GPIO43.\n- Buzzer to D7/GPIO44.\n- SPI.begin(7,-1,9,-1).\n\n**Two provisos**\n- Hold or pull up TP_RST during deep sleep. GPIO43 floats unless gpio_hold_en plus gpio_deep_sleep_hold_en is used, or the FTS02 has a pull-up.\n- The GT911 must stay in a scanning low-power mode for wake-on-touch. That is to be verified in the touch thread.",
+    "reasoning": "I checked the local core 3.3.8 libs and the Espressif docs.\n\n**Local headers (esp32s3)**\n- soc_caps.h line 329: '#define SOC_RTCIO_PIN_COUNT 22'.\n- rtc_io_channel.h defines RTCIO_GPIO0 through GPIO21 only.\n- SOC_GPIO_VALID_DIGITAL_IO_PAD_MASK is 0x0001FFFFFC000000, so GPIO26-48 are digital-only.\n- SOC_PM_SUPPORT_EXT0/EXT1_WAKEUP is 1. There is no SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP.\n- uart_pins.h: 'U0TXD_GPIO_NUM 43', 'U0RXD_GPIO_NUM 44'.\n\n**Espressif documentation**\n- The sleep-modes doc for the S3 says external wakeup allows 'Only GPIOs with the RTC functionality', numbers '0-21'. gpio_wakeup_enable works in Light-sleep only.\n- The GPIO table lists GPIO43/44 with no RTC and no ADC function.\n- The esptool boot-mode doc gives the ROM log at 115200 bps.\n- That the ROM log is emitted on UART0 TX = GPIO43 (as well as USB-Serial-JTAG) by default is from my memory of the ESP32-S3 datasheet, not re-fetched.\n\n**Variant and config**\n- Variant: D6=43, D7=44, D9=8.\n- config.h: TP_INT 43, TP_RST 44, BUZZER_PIN 8.\n\n**Header pins**\nThe RTC-capable header pins are D0-D5 and D8-D10. The display takes D0-D3, D8 and D10. D4, D5 and D9 remain. The claim is correct for header pins. The Plus back pads D16-D19 (GPIO10-13) are RTC-capable too.\n\n**SPI side-note, verified line by line in esp32-hal-spi.c**\n- spiDetachBus_MISO (l.244-252) calls spiDetachMISO. That sets spi->miso = -1.\n- spiDetachBus is then called, and its stop condition 'spi->sck == -1 || (spi->miso == -1 && spi->mosi == -1)' (l.220) is false. The bus survives tone() on GPIO8.\n- SPIClass::begin skips MISO when it is below 0 ('if (_miso >= 0 && ...)'). It substitutes defaults only if all four pins are -1. So SPI.begin(7,-1,9,-1) is valid.\n\n**Extra points that strengthen or qualify the finding**\n- The current plan puts the GT911 INT output on the ESP32's push-pull UART0 TX. That is a drive contention on every warm reset.\n- In the proposed remap, TP_RST on GPIO43 is a digital-domain pad. It floats in deep sleep unless gpio_hold_en plus gpio_deep_sleep_hold_en is used (SOC_GPIO_SUPPORT_FORCE_HOLD=1), or the FTS02 has an RST pull-up. Otherwise the GT911 may reset and never assert INT.\n- gt911.cpp does re-run the INT-low reset sequence, so boot-log glitches on RST are harmless while awake.",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/soc_caps.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/rtc_io_channel.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/uart_pins.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.c",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/SPI/src/SPI.cpp",
+     "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/system/sleep_modes.html",
+     "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/gpio.html",
+     "https://docs.espressif.com/projects/esptool/en/latest/esp32s3/advanced-topics/boot-mode-selection.html",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/config.h",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp"
+    ]
+   }
+  },
+  {
+   "id": "DB-13",
+   "claim": "The sleep floor on battery is set by the 5 V boost feeding the XIAO regulator chain, not by the ESP32 alone. Neither source documents a quiescent or deep-sleep figure for the board. The only published numbers are 80 uA typical for the ETA9740 and Seeed's '3 months on 2000 mAh' marketing claim.",
+   "evidence": "ETA9740 datasheet, BOOST MODE: 'Quiescent Current At BATT, Vbat=3.6V: 80 uA' typical. The datasheet describes no light-load auto-shutdown. XIAO ESP32S3 Plus wiki: 'Deep Sleep Mode: 3.8V/33.51 uA', measured through its own BAT pad, which is not the path used here. Seeed 7.5\" panel wiki, same driver board with an ESP32-C3: 'exceptional 3-months battery life (2000mAh) in deep sleep mode'. 2000 mAh over about 2160 h is about 0.9 mA average, which includes refreshes. 3V3 to the panel and touch is not switched: the FPC VDDIO/VCI pins are tied straight to 3V3.",
+   "sources": [
+    "https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1124/A090-V11_ETA9740.pdf",
+    "https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/",
+    "https://wiki.seeedstudio.com/xiao_075inch_epaper_panel/",
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf"
+   ],
+   "confidence": "medium",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Expect a few hundred uA of deep-sleep floor from the cell. Measure with a multimeter in series at the JST once the hardware arrives. With 4000 mAh this is months of standby, so the boost overhead does not limit the design. The slide switch gives true zero drain. The display must be hibernated and the GT911 put to sleep in firmware, because 3V3 to them is always on."
+  }
+ ],
+ "unknowns": [
+  "Exact mounting-hole coordinates and diameter, socket height, and real stack height with the XIAO seated. Seeed publishes no mechanical drawing, KiCad file or STEP for the board; only a schematic PDF and an enclosure STP for the 7.5\" panel product exist. My hole spacing (about 18 x 22 mm, about 2.2 mm diameter) is pixel-scaled from a product photo.",
+  "Whether the ETA9740 boost has any light-load auto-off. The datasheet I read (5 pages) mentions none. Seeed's own panel runs on this board with months of timer-wake deep sleep, which suggests it does not. I found no measured deep-sleep current for this board.",
+  "How the ETA9740 switches from boost to charge when USB is plugged in while the board is running on battery. The datasheet says only 'proprietary automatic mode detect'. I found no user reports of charging failures and no confirmation either.",
+  "Whether the datasheet's 200 mA charge-termination current is fixed or scales with ISET. At 0.5 A charge current a fixed 200 mA would terminate slightly early.",
+  "Which face of the GDEY075T7-T01 24-pin FPC tail carries the contacts, and how long the tail is. The Seeed connector is top-contact only. The answer decides which side of the driver board faces the display back, and whether an FPC extension is unavoidable.",
+  "Whether C24 (22 uF across the battery jack, ahead of the switch) is ceramic. If it is tantalum, a reversed battery could damage it even with the switch OFF.",
+  "Root cause of the January 2025 V2 batch defect, and where the batch code is printed.",
+  "Whether the XIAO ESP32-S3 Plus has a real on-board divider from its BAT pad to GPIO10 (ADC_BAT). The Seeed wiki lists only 'ADC_BAT | GPIO10 | Read the BAT voltage value'. This matters only if the battery were moved to the XIAO's own pads, which I do not recommend.",
+  "The physical polarity of Fabrizio's specific 606090 LiPo plug. It can only be measured on arrival.",
+  "I could not open the Good Display DESPI-C02 page directly. The 'RESE = 0.47 for GDEY075T7' statement comes from a search-result summary and forum threads, and is consistent with the UC8179 reference design."
+ ],
+ "questions_for_user": [
+  "Did you order the XIAO ESP32-S3 Plus with pre-soldered headers or with loose headers? Do you own a soldering iron? The driver board's breakout holes (CN1/CN2) are unpopulated, so some soldering is unavoidable. An unsoldered XIAO also allows a lower-profile mounting that saves about 2.5 mm.",
+  "Which matters more for the case: staying thin, or keeping the footprint close to the display? If thin, the board goes in a 'chin' beside the display. If compact, the board goes behind the display and the realistic thickness is about 18-20 mm. Would you accept adding a 24-pin 0.5 mm FPC extension (a few euro) or a USB-C panel-mount pigtail so that the USB-C and the switch can sit on the outer walls?",
+  "Do you want the board to wake from deep sleep by touching the screen, or is the slide switch the only on/off control? Wake-on-touch means TP_INT must move to D9 and the buzzer to D7 now. It also means roughly mA-level standby current for the touch controller.",
+  "Do you want a battery percentage on screen? The Seeed board cannot measure the battery. Would you add a MAX17048 I2C fuel-gauge breakout of about 3 EUR (two solder joints on the back BAT pads, shares the touch I2C bus)? Or would you ship without a gauge, which means a silent shutdown at about 2.8 V, possibly mid-game?",
+  "Is a charge time of about 9-10 h (0.5 A fixed) acceptable for the 4000 mAh cell? Would you prefer the thinner, smaller 407090 alternative mentioned in your recap, which charges faster and gives a thinner case?",
+  "For the MakerWorld audience, is a soldered build acceptable? That means headers on the driver board and possibly a fuel gauge. Or do you want to minimise soldering even at the cost of features?",
+  "Do you have calipers? Seeed publishes no drawing of this board, so the hole positions, stack height and FPC tail length must be measured when the parts arrive, before the case is modelled."
+ ]
+}
