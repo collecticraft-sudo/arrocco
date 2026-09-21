@@ -1,0 +1,281 @@
+{
+ "summary": "The planned pin map works for phase 1 (display, touch polling, buzzer), but it blocks phase 4: deep sleep with touch wake and the battery gauge. Nothing was compiled or tested on hardware. This comes from reading the local core 3.3.8 sources, the local pioarduino builder, and the Seeed, Espressif, Goodix and ETA datasheets and schematics.\n\n- **Touch wake:** ESP32-S3 RTC GPIOs are 0-21 only, so TP_INT on GPIO43 can never wake the chip from deep sleep.\n- **UART0 pins:** GPIO43 is the UART0 TX pin. The ROM drives it push-pull and prints its boot banner at 115200 baud on every reset and every deep-sleep wake, even with USB-CDC-on-boot. With INT there, it fights the GT911's INT output until `GT911::begin()` runs. GPIO44 is only a pulled-up input, so RST there is harmless.\n- **Recommended change (no extra parts):** move INT to D9/GPIO8, which is RTC-capable, and move the buzzer to D6 or D7. Keep I2C on D4/D5.\n- **GPIO3 (EPD_BUSY):** safe. The strap is ignored unless the `EFUSE_STRAP_JTAG_SEL` eFuse is burnt.\n- **Plus extra pins:** D11-D19 are solder-only pads on the underside, duplicated on the 0.4 mm board-to-board connector.\n  - GPIO47/48 are not on pads, so `docs/wiring.md` is wrong.\n  - ADC_BAT=GPIO10 is only a net name: the Seeed schematic shows no divider on the XIAO.\n- **Power and battery gauge:** on this driver board the battery feeds the XIAO's 5V pin through an ETA9740 5V boost. The 14-33 µA deep-sleep figures therefore do not apply, and neither board has a battery divider. All 11 edge pins are already used.\n- **`tone()` on GPIO8:** `tone()`/`noTone()` exist and use LEDC. `tone(8)` after `SPI.begin(7,8,9,2)` detaches only MISO; the SPI bus stays up and nothing is logged at error level. `SPI.begin(7,-1,9,2)` is the correct clean fix.\n- **platformio.ini:** `board = seeed_xiao_esp32s3` with `default_16MB.csv` builds, and boots after a USB upload, because upload uses `--flash-size detect`. It writes an 8MB flash header into `bootloader.bin` and the factory bin, which boot-loops when flashed without detect. Use `board = seeed_xiao_esp32_s3_plus` and pin the pioarduino platform URL.",
+ "findings": [
+  {
+   "id": "F1",
+   "claim": "Touch INT on GPIO43 (D6) cannot wake the ESP32-S3 from deep sleep. Only GPIO0-21 are RTC GPIOs usable for ext0/ext1. Of the free edge pins, only GPIO5, 6 and 8 qualify.",
+   "evidence": "Local SDK soc_caps.h: '#define SOC_RTCIO_PIN_COUNT 22'. rtc_io_channel.h defines RTCIO channels only for GPIO0..GPIO21. The ESP-IDF sleep docs state for ext0/ext1 that valid pins for 'ESP32-S3: 0-21'. Datasheet v2.2 section 2.3.2: in Deep-sleep 'the IO MUX ... will not work', and only RTC IO pins are 'connected to the RTC system and powered by VDD3P3_RTC'. Inference: esp_sleep_enable_ext0/ext1_wakeup on GPIO43 will be rejected, because esp_sleep.h exposes esp_sleep_is_valid_wakeup_gpio() for this check. esp_sleep.h on S3 offers ESP_EXT1_WAKEUP_ANY_LOW and ANY_HIGH.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/soc_caps.h",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/rtc_io_channel.h",
+    "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/system/sleep_modes.html",
+    "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Put TP_INT on an RTC-capable pin (GPIO8/D9 is the natural choice) before anything is wired. Use esp_sleep_enable_ext1_wakeup(1ULL<<8, ESP_EXT1_WAKEUP_ANY_HIGH), or ANY_LOW if the GT911 INT is configured falling.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Touch INT on GPIO43 (D6) cannot wake the ESP32-S3 from DEEP sleep: ext0/ext1 accept only RTC GPIO0-21 (ext1 returns ESP_ERR_INVALID_ARG with log 'Not an RTC IO: GPIO43'), and S3 has no esp_deep_sleep_enable_gpio_wakeup. Of the free edge pins only GPIO5, 6 and 8 qualify. Light sleep could still wake on GPIO43 via gpio_wakeup_enable. The phase-1 firmware itself works with INT on GPIO43 (it polls over I2C); the conflict is with the phase-4 deep-sleep/touch-wake roadmap.",
+    "reasoning": "Re-verified independently, no contrary evidence found.\n(1) Local SDK soc_caps.h line 329: '#define SOC_RTCIO_PIN_COUNT 22'; rtc_io_channel.h defines RTCIO_CHANNEL_0..21 = GPIO0..21 only. SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP is NOT defined for esp32s3, so esp_deep_sleep_enable_gpio_wakeup() (the C3/C6-style escape hatch) does not exist on S3; only ext0/ext1 remain.\n(2) IDF v5.5 sleep_modes.c (re-fetched): esp_sleep_is_valid_wakeup_gpio() returns RTC_GPIO_IS_VALID_GPIO(gpio_num); ext0 returns ESP_ERR_INVALID_ARG; ext1 loop logs 'Not an RTC IO: GPIO%d' and returns ESP_ERR_INVALID_ARG. So the 'will be rejected' inference is now verified from source, not just inferred.\n(3) IDF sleep docs (stable, esp32s3): EXT0 and EXT1 valid pins 'ESP32-S3: 0-21'.\n(4) Datasheet v2.2 Table 2-1: pin 49 U0TXD and pin 50 U0RXD are powered by VDD3P3_CPU and have no 'RTC IO MUX' entry; section 2.3.2: 'When the chip is in Deep-sleep mode, the IO MUX ... will not work.' Espressif HW design guidelines: 'Only GPIOs in the VDD3P3_RTC power domain can be controlled in Deep-sleep mode.'\n(5) Seeed's own XIAO ESP32-S3 Plus front pinout PNG labels D0-D5 and D8-D10 'RTC' and does NOT label D6(GPIO43)/D7(GPIO44) RTC.\n(6) esp_sleep.h local: non-ESP32 branch has ESP_EXT1_WAKEUP_ANY_LOW=0 / ANY_HIGH=1; esp_sleep_enable_ext1_wakeup(uint64_t, mode) exists at line 331.\nFree edge pins in the plan = GPIO5,6,8,43,44; RTC-capable subset = 5,6,8 (datasheet: RTC_GPIO5/6/8, ADC1_CH4/5/7). Driver-board schematic shows A9_D9_MISO (GPIO8) goes only to CN2/CN4, not to the display FPC, so GPIO8 is genuinely free.\nNuances the researcher omitted: (a) light sleep CAN wake on GPIO43 (docs: gpio_wakeup_enable 'can be used with any IO (RTC or digital)'), so the limitation is deep sleep only; (b) the phase-1 firmware is not broken by this: gt911.cpp polls 0x814E over I2C and uses INT only as the address strap during reset, so this contradicts the phase-4 roadmap (deep sleep + touch wake), not the code as written; (c) if SPI.begin keeps MISO=8 while INT moves to GPIO8, change EPD_MISO to -1 (core 3.3.8 spiDetachBus_MISO only detaches MISO and keeps the bus alive while MOSI is attached, so it is not fatal, but it is untidy).",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/soc_caps.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/rtc_io_channel.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/esp_hw_support/include/esp_sleep.h",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5/components/esp_hw_support/sleep_modes.c",
+     "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/system/sleep_modes.html",
+     "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf",
+     "https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32s3/schematic-checklist.html",
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/img/XIAO_ESP32-S3_Plus_front_pinout.png",
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf"
+    ]
+   }
+  },
+  {
+   "id": "F2",
+   "claim": "The best re-assignment with zero extra parts is INT to D9/GPIO8, buzzer to D6/GPIO43, and RST staying on D7/GPIO44, with I2C staying on D4/D5. There is a silent variant (A'') and a variant that puts I2C on 43/44 (X).",
+   "evidence": "The free pins are GPIO5, 6, 8 (RTC and ADC1) and GPIO43, 44 (neither). Five functions need five pins: SDA, SCL, INT, RST, buzzer. Only INT needs an RTC pin.\n\nOption A' (swap INT and buzzer only): INT=GPIO8, BUZ=GPIO43, RST=GPIO44.\n- INT can wake the chip, and the ESP TX no longer fights the GT911 INT output.\n- The ROM UART banner (about 25 ms at 115200 baud) goes into the piezo at every reset and wake. That is a faint tick (inference).\n- RST sits on GPIO44, which at reset is 'WPU, IE' (datasheet pin table), so the GT911 stays out of reset.\n\nOption A'' (silent): BUZ=GPIO44, RST=GPIO43.\n- The piezo sees only a DC pull-up.\n- The GT911 RST line gets UART bit-glitches during the ROM banner. This is harmless because GT911::begin() does a full 10 ms reset afterwards.\n\nOption X: SCL=GPIO43, SDA=GPIO44, with INT, RST and BUZ on GPIO5, 6, 8.\n- During the banner SDA stays high (RX input with pull-up), so no I2C START can occur. This is an inference from the I2C START definition.\n- It gives RST an RTC pin that rtc_gpio_hold can keep high in deep sleep, and a silent buzzer.\n\nHolding a non-RTC pin in deep sleep: GPIO43/44 need gpio_hold_en + gpio_deep_sleep_hold_en. The IDF docs say 'the digital GPIO will be reset to its default state when the chip wakes up from Deep-sleep'. Otherwise rely on the pull-up: the GT911 datasheet pin table says for Reset 'External 10K pull-up resistor required, active-low reset'.\n\nThe driver-board schematic shows CN1 and CN2 (7-pin SIP) breaking out all XIAO pins: A0..A6 on CN1, and 5V, GND, 3V3, D10, D9, D8, D7 on CN2. The Dupont wires can land there.",
+   "sources": [
+    "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf",
+    "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/gpio.html",
+    "https://focuslcds.com/content/GT911.pdf",
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Update config.h and wiring.md: TP_INT=8 (D9), BUZZER_PIN=43 (D6) or 44 (D7), TP_RST on the other one. Add a 1 kOhm series resistor on INT if you want belt and braces. Before sleep call gpio_hold_en() on the RST pin plus gpio_deep_sleep_hold_en(), or confirm a 10k pull-up exists on the FTS02 or the touch FPC.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "INT must move to D9/GPIO8 (RTC-capable, free on the driver board); I2C stays on D4/D5. For the remaining two functions note that the XIAO has R6 = 499 ohm in series with D6/GPIO43 (not with D7/GPIO44). Safest default: RST on D6/GPIO43 (499 ohm is irrelevant for a high-impedance input with 10k pull-up; firmware re-resets the GT911 after the ROM banner), buzzer on D7/GPIO44 (direct drive, only a weak pull-up at reset). Buzzer on D6 (variant A') is acceptable only if the KY-006 is a true piezo; if it measures ~16 ohm it will be almost mute there. Variant X (SCL on GPIO43) is marginal because 499 ohm in SCL leaves VOL ~0.69 V against 2k pull-ups (GT911 VIL max 0.825 V). For deep sleep use gpio_hold_en + gpio_deep_sleep_hold_en on the RST pin or rely on the module's 10k RST pull-up (present in Goodix's reference design, unverified on this panel). Set EPD_MISO to -1 in SPI.begin once GPIO8 is reused.",
+    "reasoning": "Core of the claim verified; one material omission changes the ranking between the variants.\nVerified: free pins GPIO5/6/8 are RTC+ADC1 (datasheet: RTC_GPIO5/6/8, ADC1_CH4/5/7), GPIO43/44 are neither (VDD3P3_CPU domain). Datasheet Table 2-1: pin 50 U0RXD 'WPU, IE' both At Reset and After Reset, so RST on GPIO44 idles high. gpio.h local doc comment verbatim: 'For ESP32/S2/C3/S3/C2, this function cannot be used to hold the state of a digital GPIO during Deep-sleep. Even if this function is enabled, the digital GPIO will be reset to its default state when the chip wakes up from Deep-sleep. If you want to hold the state of a digital GPIO during Deep-sleep, please call gpio_deep_sleep_hold_en.' GT911 datasheet pin table: Reset 'External 10K pull-up resistor required, active-low reset'; its reference schematic shows R1 10K /RST->VDDIO and R7 680R in series with INT ON THE MODULE, so a pull-up very likely already exists on the touch FPC (not verified for Good Display's panel). Driver-board schematic (EPAPER_IO_V20, the PDF linked from the V2 wiki): CN1 = A0_D0..A6_D6, CN2 = VDD_5V, GND, 3V3, D10, D9, D8, D7; D4/D5/D6/D7/D9 go nowhere else on that board. Whether CN1/CN2 are populated headers or bare holes is NOT stated anywhere I could read.\nOMISSION (primary evidence): the XIAO ESP32-S3 Plus schematic V1.1 has 'R6 499R' in series between ESP pin 49 U0TXD and the D6/TX pad (Espressif guideline: 'It is recommended to connect a 499 ohm series resistor to the U0TXD line to suppress harmonics'). D7/RX has no series part. Consequences: (a) Option A' puts the buzzer behind 499 ohm. Fine for a true piezo (~4 kohm reactance at 2 kHz), but many KY-006 modules are actually 16-ohm electromagnetic transducers despite the 'piezo' name (arduinomodules.info: a multimeter reading of 8/16 ohm 'indicates a passive buzzer'); behind 499 ohm such a part gets ~6 mA and is nearly inaudible, and UART idle-high would push DC through the coil from reset until firmware takes the pin. (b) Option X puts SCL behind 499 ohm: with 2k module pull-ups (GT911 reference R4/R5 = 2k) VOL at the GT911 = 3.3*529/2529 = 0.69 V versus GT911 VIL max 0.25*VDDIO = 0.825 V: only ~135 mV margin, so X is electrically marginal and should not be the default. (c) Option A'' (BUZ = GPIO44/D7 direct, RST = GPIO43/D6) is the variant R6 does not hurt: RST is a high-impedance input, 499 ohm against a 10k pull-up gives VOL 0.16 V.\nThe 'harmless UART glitches on RST' and 'faint tick' statements are inferences (GT911 reset-timing figures are images in the PDF; longest low run of an ASCII byte at 115200 is <= 78 us); plausible but not verified.\nQuestions only Fabrizio can answer: measure DC resistance of the KY-006 between S and - (open = piezo, ~16 ohm = magnetic); check on arrival whether CN1/CN2 carry headers.",
+    "sources": [
+     "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/esp_driver_gpio/include/driver/gpio.h",
+     "https://focuslcds.com/content/GT911.pdf",
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf",
+     "https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32s3/schematic-checklist.html",
+     "https://wiki.seeedstudio.com/xiao_eink_expansion_board_v2/",
+     "https://arduinomodules.info/ky-006-passive-buzzer-module/"
+    ]
+   }
+  },
+  {
+   "id": "F3",
+   "claim": "GPIO43 is an active push-pull UART0 TX from reset, and the ROM prints its boot banner there on every reset and every deep-sleep wake. ARDUINO_USB_CDC_ON_BOOT does not change that. With TP_INT wired there, the ESP output fights the GT911 INT output until GT911::begin() runs.",
+   "evidence": "Datasheet v2.2 section 3.3: 'During the boot process, the messages by the ROM code can be printed to: (Default) UART0 and USB Serial/JTAG controller'. The eFuses EFUSE_UART_PRINT_CONTROL and EFUSE_DIS_USB_SERIAL_JTAG_ROM_PRINT default to 0 ('not burnt'), and eFuse burning is one-time. IO MUX table: pin 49 is GPIO43, function F0 = U0TXD, type 'O'; pin 50 is GPIO44, U0RXD, 'I1'; both reset as 'WPU, IE'.\n\nLocal Arduino sdkconfig: CONFIG_ESP_CONSOLE_UART_DEFAULT=y, CONFIG_ESP_CONSOLE_UART_NUM=0, CONFIG_BOOTLOADER_LOG_LEVEL=1, CONFIG_LOG_DEFAULT_LEVEL=1. The 2nd-stage bootloader and the IDF therefore print only errors, but the ROM banner (about 250-300 bytes at 115200 baud, roughly 25 ms) is always sent.\n\nThe pad stays U0TXD, driven high, until firmware calls pinMode(), which runs gpio_config and switches the pad to the GPIO function. In main.cpp that happens only after delay(300) and display.init.\n\nGT911 datasheet section 8.2: the GT911 'driv[es] INT output from low to high', with VOH = 0.85*VDDIO. INT is therefore inferred to be push-pull, idle low, which means two drivers oppose each other for about 0.5-1 s per boot.\n\nOn cold power-up INT is high from the UART idle level, so the GT911 probably latches address 0x14. The firmware's explicit reset then forces 0x5D. RST on GPIO44 is only a pulled-up input and is harmless.",
+   "sources": [
+    "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig",
+    "https://focuslcds.com/content/GT911.pdf",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/main.cpp",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Do not put any device output, such as the GT911 INT, on GPIO43. Use that pin only for something that is an input on the far side: the buzzer, GT911 RST, or I2C SCL. Do NOT burn UART_PRINT_CONTROL to silence the banner: it is irreversible and unsuitable for a public build.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "GPIO43 is UART0 TX from reset (IO MUX F0 = U0TXD, output) and the ROM prints its ~275-byte banner there at 115200 baud on every reset and deep-sleep wake; ARDUINO_USB_CDC_ON_BOOT does not change that, and the only way to silence it is a one-time eFuse. With TP_INT wired there the ESP drives the line against the GT911 INT output until GT911::begin() runs, BUT the XIAO's on-board R6 = 499 ohm series resistor on D6 limits that contention to <= 6.6 mA, so it is benign, and the phase-1 firmware (I2C polling, INT used only as address strap) works as written. Impact is 'avoid for cleanliness and because of F1', not 'will not work'. Do not burn UART_PRINT_CONTROL.",
+    "reasoning": "Facts verified, severity overstated.\nVerified: Datasheet v2.2 section 3.3 verbatim: 'During the boot process, the messages by the ROM code can be printed to: (Default) UART0 and USB Serial/JTAG controller'. Section 3 verbatim: 'The default values of all the above eFuse parameters are 0, which means that they are not burnt. Given that eFuse is one-time programmable, once programmed to 1, it can never be reverted to 0.' (list includes EFUSE_UART_PRINT_CONTROL and EFUSE_DIS_USB_SERIAL_JTAG_ROM_PRINT). IO MUX table: '49 GPIO43 U0TXD O', '50 GPIO44 U0RXD I1'; Table 2-1 both 'WPU, IE' at/after reset. Local sdkconfig: CONFIG_ESP_CONSOLE_UART_DEFAULT=y, CONFIG_ESP_CONSOLE_UART_NUM=0, CONFIG_BOOTLOADER_LOG_LEVEL=1, CONFIG_LOG_DEFAULT_LEVEL=1, CONFIG_BOOT_ROM_LOG_ALWAYS_ON=y. ARDUINO_USB_CDC_ON_BOOT is a compile-time define for the Arduino core and cannot affect mask-ROM output. main.cpp order confirmed: Serial.begin, delay(300), pinMode(BUZZER), SPI.begin, display.init, Wire.begin, then touch.begin() is the first code touching GPIO43. GT911 datasheet: 'driving INT output from low to high', VOH 0.85*VDDIO, so INT is an actively driven output once the GT911 runs; address strap 0xBA/0xBB (0x5D) vs 0x28/0x29 (0x14) via INT level at reset confirmed.\nWhat the researcher missed: the XIAO schematic has R6 499R in series between U0TXD and the D6 pad, and the Goodix reference design adds R7 680R in series with INT on the module. Worst-case contention current is therefore 3.3 V / 499 ohm = 6.6 mA (about 2.8 mA with the 680R), far below the S3's 40 mA source / 28 mA sink ratings. The 'two drivers fight' situation is electrically benign, not a damage risk. Also, the phase-1 firmware WORKS as written with INT on GPIO43: begin() drives INT low through 499 ohm during reset (address 0x5D), then polls over I2C and never reads INT. So F3 alone does not make the plan fail; the real reason to move INT is F1 (no deep-sleep wake) plus not wanting ROM banner edges on an interrupt line once INT is actually used (spurious triggers at every wake before the pin is reconfigured are impossible anyway because the pin is then an ESP output, i.e. INT is simply unreadable there until pinMode).\nBanner length (~275 bytes, ~24 ms at 115200) recomputed from the standard S3 ROM banner; consistent. 'GT911 probably latches 0x14 on cold power-up' is an inference, harmless because begin() re-straps.",
+    "sources": [
+     "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig",
+     "https://focuslcds.com/content/GT911.pdf",
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf",
+     "https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32s3/schematic-checklist.html",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/main.cpp",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp"
+    ]
+   }
+  },
+  {
+   "id": "F4",
+   "claim": "EPD_BUSY on GPIO3, a strapping pin, carries no risk on a stock XIAO.",
+   "evidence": "Datasheet v2.2 Table 3-1: GPIO3 default is 'Floating'. Section 3.4 and Table 3-5: GPIO3 only selects the JTAG source when EFUSE_STRAP_JTAG_SEL=1. With the default eFuses (0/0/0) the GPIO3 column reads 'Ignored' and the source is USB Serial/JTAG. Boot mode is set by GPIO0 and GPIO46 only, and VDD_SPI by GPIO45. None of those are on the XIAO edge pins; GPIO0 is the BOOT button. Seeed's own driver board hard-wires BUSY to D2 (schematic net A2_D2_BUSY). Power-up glitch table: GPIO1-14 see a 60 us low-level glitch at power-up, irrelevant for RST, CS, BUSY and DC.",
+   "sources": [
+    "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf",
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "None. Never burn EFUSE_STRAP_JTAG_SEL."
+  },
+  {
+   "id": "F5",
+   "claim": "The Plus extra pins D11-D19 (GPIO38-42 and 10-13) are SMD pads on the underside, duplicated on the 30-pin 0.4 mm board-to-board connector. They are not castellated and not reachable from a header. GPIO47/48 are NOT on pads; they go to the board-to-board connector only. wiring.md is wrong about that.",
+   "evidence": "Seeed schematic XIAO_ESP32S3_Plus V1.1: the footprint U2 'XIAO-HALF-HOLE-23P' has pins 1-14 as the classic edge and pins 15-23 as GPIO38, 39, 40, 41, 42, GPIO10_XMCLK/ADC_BAT, GPIO11, GPIO12, GPIO13. IO47/DVP_HREF and IO48/DVP_Y9 appear only on J3, the 30-pin connector. The test pads TP1-TP6 (MTMS, MTDI, MTDO, MTCK, EN) carry the note 'Same position as XIAO-C3'. The flash U5 carries the note 'Layout note: Bottom'.\n\nThe Seeed wiki offers KiCad libraries for 'XIAO Plus Base (with bottom pad lead out)' and 'without bottom pad lead out'. espboards.dev: 'those pads are only reachable by soldering the board flat onto a carrier PCB - there is nothing to plug a header into'.\n\nThe local variant maps D16=10, D17=13, D18=12, D19=11. GPIO10-13 are RTC GPIOs, and GPIO10 is ADC1_CH9 (adc_channel.h: ADC1_CHANNEL_9_GPIO_NUM 10). GPIO38-42 are neither RTC nor ADC.\n\nwiring.md says: 'pad extra sul retro (GPIO 47, 48, 38, ecc.)'.\n\nInference: with the XIAO on female headers there is a gap of several mm, so thin wires soldered to the underside pads before plugging in are feasible but fiddly.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf",
+    "https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/",
+    "https://www.espboards.dev/esp32/xiao-esp32s3-plus/",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/docs/wiring.md"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": true,
+   "recommended_action": "Fix wiring.md. Future buttons or a wake button should go on underside pads GPIO11-13, which are RTC-capable. Keep GPIO10 for the battery ADC. Decide now whether underside soldering is acceptable for MakerWorld builders.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "The Plus extra pins D11-D19 (GPIO38-42 and GPIO10,13,12,11) ARE castellated: nine 1.27 mm-pitch half-holes on the board edges, interleaved between the classic 2.54 mm pins (D11-D16 between D0..D6, D17-D19 between D7..D10), also duplicated on the 30-pin B2B connector J3. They cannot take a pin header, but a wire can be soldered to the edge half-hole from the side/top. GPIO47/48 are on no pad or castellation at all, only on J3, so wiring.md ('pad extra sul retro (GPIO 47, 48, 38, ecc.)') is wrong about 47/48. GPIO10-13 are RTC-capable (GPIO10 = ADC1_CH9, GPIO11-13 = ADC2); GPIO38-42 are neither RTC nor ADC.",
+    "reasoning": "PARTLY WRONG on the physical description; the plan-contradicting part is correct.\nConfirmed from Seeed schematic XIAO_ESP32S3_Plus V1.1 (page 4, read as text and as rendered image): U2 'XIAO-HALF-HOLE-23P' pins 1-14 = classic edge, 15-23 = IO38, IO39, IO40, IO41, IO42, IO10/XMCLK/ADC_BAT, IO11, IO12, IO13. IO47/DVP_HREF and IO48/DVP_Y9 appear only at ESP pins 37/36 and J3 pins 22/21 (B2B connector); they are on no pad. IO38-42 and IO10-13 are duplicated on J3. Notes 'Same position as XIAO-C3' (TP1-TP6) and 'Layout note: Bottom' present. Local variant: D11=38, D12=39, D13=40, D14=41, D15=42, D16=10, D17=13, D18=12, D19=11. Datasheet/adc_channel.h: GPIO10 = RTC_GPIO10/ADC1_CH9, GPIO11-13 = RTC + ADC2_CH0-2, GPIO38-42 neither. wiring.md line 35 ('pad extra sul retro (GPIO 47, 48, 38, ecc.)') is wrong about 47/48. Wiki lists KiCad 'XIAO Plus Base (with / without bottom pad lead out)'.\nREFUTED sub-claim 'They are not castellated': Seeed's own announcement is titled 'Seeed Studio XIAO Plus, More Castellation IOs for SMD Soldering' and describes 'redesigned 23 castellation pins (20 GPIOs, 3 power pins)' with '9 extra 1.27mm pitch SMD castellation pins'; CNX Software: '23 castellated mounting pins ... 9x 1.27 mm pitch castellations pins'. The schematic footprint name is 'HALF-HOLE-23P' (all 23 pins). Seeed's front and back pinout PNGs show small half-holes on the board EDGE interleaved between the 2.54 mm pins: D11-D16 in the six gaps between D0..D6, D17/D18/D19 in the gaps D7-D8, D8-D9, D9-D10. They are visible from the top side. espboards.dev's 'pads on the back' wording is secondary and imprecise. 'Not reachable from a header' remains true (1.27 mm offset, no through-hole). Practical consequence: a thin wire can be soldered to the edge half-hole from the side/top, even after the XIAO has its pin headers; it is fiddly (0.6 mm clearance to the neighbouring header pins) but it is not 'underside soldering'. Additionally GPIO39-42 are also available on the round underside JTAG test pads (MTCK/MTDO/MTDI/MTMS).\nQuestion for Fabrizio: is one fine-pitch solder joint on an edge castellation acceptable for MakerWorld builders, or must the design be plug-only?",
+    "sources": [
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf",
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/img/XIAO_ESP32-S3_Plus_back_pinout.png",
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/img/XIAO_ESP32-S3_Plus_front_pinout.png",
+     "https://www.seeedstudio.com/blog/2025/01/02/seeed-studio-xiao-plus-more-castellation-ios-for-smd-soldering/",
+     "https://www.cnx-software.com/2025/01/13/seeed-studio-xiao-plus-series-adds-more-gpio-castellated-holes/",
+     "https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/",
+     "https://www.espboards.dev/esp32/xiao-esp32s3-plus/",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/docs/wiring.md"
+    ]
+   }
+  },
+  {
+   "id": "F6",
+   "claim": "ADC_BAT = GPIO10 in the variant is only a define and a net name: the XIAO Plus has no on-board battery divider. The Seeed driver board has none either, and the battery never reaches the XIAO BAT pads. The roadmap's battery gauge is impossible without adding a divider, and all 11 edge pins are already used.",
+   "evidence": "XIAO Plus schematic, full resistor list: R1/R2 5.1K (CC), R3/R4 22R (USB), R6 499R, R7/R8 10K (EN/BOOT), R9 100K (VBUS to GND at the Q1 gate), R10 220K (charger IREF, note 'ICharge=24000/220K=110mA'), R11 10K (CHG LED), R13 249K (buck), R15 1.5K (user LED). No resistor joins VBAT to IO10. The net 'IO10/XMCLK/ADC_BAT' goes only to pad 20 and to J3. The wiki says: 'we do not have a GPIO configured for the battery pin'.\n\nDriver board schematic: the JST battery connector (CN5) goes through the slide switch (CN6) to the BAT_4V2 net, the ETA9740E8A BAT pin and inductor L2. The ETA9740 OUT pin drives VDD_5V, which goes to XIAO pin 14 (5V/VBUS). R5 360K on ISET, note 'Charging current = 0.5A'. LED1-3 are not connected. No divider to any XIAO pin. BAT_4V2 and GND are available on the unpopulated pads H1 and H2.\n\nPin budget: display 6 + touch 4 + buzzer 1 = 11 of the 11 edge pins.\n\nespboards.dev claims 'The Plus routes the cell to GPIO10 as ADC_BAT'. That is contradicted by the Seeed schematic, which is the primary source.",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf",
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+    "https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/",
+    "https://www.espboards.dev/esp32/xiao-esp32s3-plus/"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "For the gauge, add a 2x 470k-1M divider plus 100 nF from the driver board's BAT_4V2 (pad H1) to the XIAO underside pad GPIO10 (ADC1_CH9, which works with WiFi on). Alternatively free an edge ADC pin by dropping the buzzer or TP_RST. A multiplex trick on GPIO8 only works if the buzzer stays there, which conflicts with F2. Decide before designing the case.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "ADC_BAT = GPIO10 on the XIAO ESP32-S3 Plus is only a define/net name: the board has no battery divider (schematic V1.1 + forum measurement), despite the Seeed wiki table and espboards.dev implying otherwise. The Seeed ePaper driver board has none either, and the cell never reaches the XIAO (the XIAO only sees the ETA9740's boosted 5 V on pin 14). A battery gauge therefore needs added hardware, and all 11 header pins are used. Options: (a) 2x 470k-1M divider + 100 nF from driver-board pad H1 to the D16/GPIO10 edge castellation (ADC1_CH9, usable with WiFi); note H1 = net BAT_4V2 is the unswitched battery side of the slide switch, so the divider draws 2-4.5 uA permanently (negligible); or (b) an I2C fuel gauge on H1/H2 sharing the touch I2C bus, which needs no GPIO at all.",
+    "reasoning": "Main claim verified on both schematics; three corrections.\nXIAO Plus schematic V1.1 (rendered page 4 inspected): resistor designators present are R1,R2 (5.1K CC), R3,R4 (22R), R6 (499R), R7,R8 (10K), R9 (100K), R10 (220K, 'ICharge=24000/220K=110mA'), R11 (10K), R13 (249K), R15 (1.5K); R5 became L5 (24nH) in V1.1; no R12/R14. Net IO10/XMCLK/ADC_BAT goes only to U2 pin 20 and J3 pin 6; VBAT goes only U4(SGM40567 charger) -> Q1 -> VIN -> U3 buck. No divider. Independent confirmation: Seeed forum thread 'XIAO ESP32S3 Plus: ADC_BAT on GPIO10?' where user djholt reports 'the voltage divider circuit is not present on the board' and measured with his own 1/2 divider + 100 nF. Note that Seeed's own wiki pin table says 'ADC_BAT | GPIO10 | Read the BAT voltage value', which is misleading, and espboards.dev repeats it ('The Plus routes the cell to GPIO10 as ADC_BAT'); the schematic contradicts both.\nDriver board schematic EPAPER_IO_V20 (the PDF linked from the V2 wiki page): U1 ETA9740E8A, OUT -> VDD_5V -> XIAO pin 14, ISET R5 360K_1% 'Charging current = 0.5A', LED1-3 no-connect, no divider to any XIAO pin, XIAO socket CN4 has only the 14 edge pins so the underside BAT pads are never reached. H1 (BAT_4V2) and H2 (GND) are DNP pads. Pin budget 6+4+1 = 11/11 confirmed from config.h.\nCorrections: (1) My reading of the rendered schematic: CN5 (battery JST) pin 1 and H1 sit directly on net BAT_4V2, which goes to throw pin 1 of slide switch CN6; the switch common (pin 2) is a separate unnamed net feeding U1 BAT, C17/C18 and L2. So BAT_4V2/H1 is the UNSWITCHED battery side, not the charger side as the researcher wrote. A divider on H1 therefore loads the cell even with the switch off (2.1-4.5 uA with 2x1M / 2x470k: negligible) and, as a side effect worth documenting, USB charging only works with the switch ON. (2) Per F5 correction, GPIO10/D16 is an edge castellation, not an underside-only pad. (3) 'Impossible without adding a divider' is too narrow: it is impossible without added hardware, but an I2C fuel gauge (e.g. MAX17048, address 0x36) wired to H1/H2 and sharing the GT911's SDA/SCL on D4/D5 needs no extra GPIO, no ADC calibration and no fine-pitch soldering on the XIAO. ESP32-S3 has no internal VBAT channel and the XIAO only ever sees the boosted 5 V, so there is no software-only option.\nQuestion for Fabrizio: divider to the D16 castellation (2 resistors + cap, one fine solder joint) or a ~3-5 EUR I2C fuel-gauge breakout on the touch bus (plug/solder only on the driver board pads H1/H2)?",
+    "sources": [
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf",
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+     "https://wiki.seeedstudio.com/xiao_eink_expansion_board_v2/",
+     "https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/",
+     "https://forum.seeedstudio.com/t/xiao-esp32s3-plus-adc-bat-on-gpio10/291965",
+     "https://www.espboards.dev/esp32/xiao-esp32s3-plus/",
+     "https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1124/A090-V11_ETA9740.pdf"
+    ]
+   }
+  },
+  {
+   "id": "F7",
+   "claim": "The published XIAO S3 deep-sleep figures apply only when powering through the BAT pads. In this build the battery feeds the XIAO 5V pin through the ETA9740 boost, so the sleep floor is set by the boost, the XIAO charger and a 100k resistor, and by the GT911 if it stays awake for touch wake.",
+   "evidence": "- Seeed wiki: 'Deep Sleep Mode: 14 uA' (S3) and 'Deep Sleep Mode: 3.8V/33.51 uA' (Plus).\n- Seeed forum (PPK2, 3.8 V on the BAT pad): 'S3 was 11.9uA'.\n- Qoitech: 13.4 uA at 3.8 V on the battery pad. Other forum users report 130-300 uA with a poor configuration.\n- ESP32-S3 datasheet Table 5-10: deep sleep 7-8 uA for the chip.\n- ETA9740 datasheet, boost mode: 'Quiescent Current At BATT, Vbat=3.6V: 80 uA', output 5.05-5.15 V, 'BATT Ok Threshold 3.2V rising, HYS 0.4V'. It mentions no light-load auto-shutdown.\n- XIAO Plus schematic: R9 100K from VBUS to GND draws about 51 uA at 5.1 V. The SGM40567 charger is powered whenever VBUS is present.\n- Wiki, charge LED with no battery on the XIAO pads: 'the red light comes on when the Type-C cable is connected and goes off after 30 seconds'. By inference the same happens every time the driver board's 5 V appears.\n- GT911 datasheet section 10.4: Normal 8 mA (max 14.5), Green 3.3 mA, Doze 0.78 mA, Sleep 70-120 uA.\n- Sleep mode exits only 'when host outputs a high level to INT pin for 2ms to 5ms', so there is no touch detection in Sleep.\n- Green mode scans about every 40 ms and 'automatically enters Normal mode if any touch is detected'.\n\nInference: wake-on-touch costs about 0.8-3.3 mA continuously, which is roughly 5 months down to 50 days on 4000 mAh before converter losses. The ESP32's own uA level is irrelevant next to that.",
+   "sources": [
+    "https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/",
+    "https://forum.seeedstudio.com/t/comparison-of-sleep-currents-for-xiao-esp32c6-s3-and-c3/276444",
+    "https://www.qoitech.com/blog/esp32-s3-c3-c6-sleep-power-consumption/",
+    "https://forum.seeedstudio.com/t/xiao-esp32s3-not-sense-how-to-get-14ua-in-deepsleep/271734",
+    "https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1124/A090-V11_ETA9740.pdf",
+    "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf",
+    "https://focuslcds.com/content/GT911.pdf",
+    "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf"
+   ],
+   "confidence": "medium",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Treat the driver board's slide switch as the real off. Measure the actual battery-side sleep current once the parts arrive, in series with the JST lead. In sleep firmware: call display.hibernate(), isolate or hold the RTC pins, keep GT911 RST high, and choose Green/Doze (touch wake) or GT911 Sleep (button or timer wake only)."
+  },
+  {
+   "id": "F8",
+   "claim": "Light sleep can wake on any GPIO, GPIO43 included, and skips the ROM banner. On this board with stock Arduino libs it draws about 3 mA, and it cannot keep WiFi associated. Once the GT911 draw is counted it is not much better than deep sleep.",
+   "evidence": "IDF docs, GPIO wakeup (light sleep only): 'This method can be used with any IO (RTC or digital)', level-triggered. Qoitech measured the XIAO ESP32-S3 in light sleep at 2.88 mA by default, and at 692 uA only with CONFIG_ESP_SLEEP_POWER_DOWN_FLASH=y. The local Arduino sdkconfig does not set that option. The datasheet adds PSRAM standby in light sleep ('140 uA for 8 MB 8-line PSRAM (3.3 V)') on top of 240 uA for the chip. The local sdkconfig has '# CONFIG_PM_ENABLE is not set', so automatic light sleep and DTIM-based WiFi power save are unavailable without rebuilding the libs. USB-CDC drops during light sleep.",
+   "sources": [
+    "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/system/sleep_modes.html",
+    "https://www.qoitech.com/blog/esp32-s3-c3-c6-sleep-power-consumption/",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig",
+    "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf"
+   ],
+   "confidence": "medium",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Move INT to an RTC pin anyway (F2). That keeps both deep and light sleep available. Use light sleep only for short pauses between moves, where keeping RAM state matters."
+  },
+  {
+   "id": "F9",
+   "claim": "Core 3.3.8 has tone() and noTone(), built on LEDC. tone(8,...) after SPI.begin(7,8,9,2) detaches ONLY the MISO pin. The SPI bus keeps running with SCK and MOSI, and nothing is logged at error level. SPI.begin(7,-1,9,2) is the correct clean fix.",
+   "evidence": "Tone.cpp: a FreeRTOS 'toneTask' (priority 10, queue of 128) calls ledcAttach(pin, freq, 10) the first time, then ledcWriteTone. With a duration it runs delay(duration) and ledcWriteTone(pin,0) and stays attached. noTone() calls ledcDetach.\n\nTrace of the conflict:\n1. ledcAttachChannel() (esp32-hal-ledc.c lines 204-213) calls perimanClearPinBus(8), which is perimanSetPinBus(8, INIT, NULL).\n2. periman.c lines 145-153 call deinit_functions[SPI_MASTER_MISO], which is spiDetachBus_MISO (esp32-hal-spi.c lines 244-252).\n3. That runs spiDetachMISO(): pinMatrixInDetach, spi->miso = -1, and a nested clear that returns true.\n4. spiDetachBus() (lines 213-232) stops the bus only if 'spi->sck == -1 || (spi->miso == -1 && spi->mosi == -1)'. Here sck=7 and mosi=9, so it returns true with the bus left running.\n5. LEDC then claims the pin and prints log_i 'LEDC attached to pin 8', which is invisible at CORE_DEBUG_LEVEL=2.\n\nSPI.cpp lines 118-126: 'if (_miso >= 0 && !spiAttachMISO(_spi, _miso))', so -1 skips MISO entirely. GxEPD2_EPD::init() calls '_pSPIx->begin();' with no arguments, which is a no-op because SPIClass::begin starts with 'if (_spi) return true;'.\n\nIf the user did NOT pre-begin, the variant defaults would claim MISO=8 and SS=44. The firmware's pinMode(BUZZER_PIN, OUTPUT) before SPI.begin is silently overridden: spiAttachMISO does pinMode(8, INPUT).",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/Tone.cpp",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-ledc.c",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-periman.c",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.c",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/SPI/src/SPI.cpp",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_EPD.cpp"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Change to SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS), delete EPD_MISO, and keep SPI.begin() BEFORE display.init(). This becomes mandatory hygiene once GPIO8 becomes TP_INT."
+  },
+  {
+   "id": "F10",
+   "claim": "The platformio.ini uses the wrong board. 'seeed_xiao_esp32s3' with 'default_16MB.csv' builds, and boots after a USB upload, but it produces bootloader.bin and firmware.factory.bin with an 8MB flash header. Those boot-loop when flashed without size detection, for example from a web flasher for the MakerWorld release. The correct board id is 'seeed_xiao_esp32_s3_plus'.",
+   "evidence": "Local board JSONs: seeed_xiao_esp32s3.json has upload.flash_size '8MB' and variant XIAO_ESP32S3. seeed_xiao_esp32_s3_plus.json has flash_size '16MB', maximum_size 16777216, memory_type qio_opi, -DARDUINO_XIAO_ESP32S3_PLUS and variant XIAO_ESP32S3_Plus.\n\nBuilder behaviour:\n- partitions.bin is built with 'gen_esp32part.py -q $SOURCE $TARGET'. There is no --flash-size check, so the build passes, and the size check uses app0 = 0x640000.\n- pioarduino-build.py lines 108-109 build the bootloader with '--flash-size', board_config.get('upload.flash_size'), which gives 8MB.\n- main.py lines 905-906 (elf2image) and 1625-1636 (merge-bin factory image) use the same 8MB.\n- Upload (main.py lines 1782-1783) uses '--flash-size','detect', so esptool patches the header to 16MB. That is why a USB upload boots.\n\nIDF flash_partitions.c: 'if (pos->offset > chip_size || pos->offset + pos->size > chip_size)' gives 'partition %d invalid - offset 0x%x size 0x%x exceeds flash chip size 0x%x'. In default_16MB.csv, app1 ends at 0xC90000, which is beyond 0x800000.\n\nThe base variant also lacks the D11-D19 and ADC_BAT defines (checked with a diff of pins_arduino.h).\n\n'platform = espressif32' is unpinned. The local install came from 'https://github.com/pioarduino/platform-espressif32/releases/download/55.03.38-1/platform-espressif32.zip' (.piopm). Other users would get the PlatformIO registry platform instead, which may ship a different Arduino core and may lack the Plus board.\n\ndefault_16MB.csv exists locally: 2x 6.25 MB OTA apps, 3.4 MB spiffs and a coredump partition.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32_s3_plus.json",
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32s3.json",
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/builder/main.py",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/tools/pioarduino-build.py",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/tools/partitions/default_16MB.csv",
+    "https://raw.githubusercontent.com/espressif/esp-idf/v5.5/components/bootloader_support/src/flash_partitions.c",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/platformio.ini"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Use:\n[env:xiao_esp32s3_plus]\nplatform = https://github.com/pioarduino/platform-espressif32/releases/download/55.03.38-1/platform-espressif32.zip\nboard = seeed_xiao_esp32_s3_plus\nframework = arduino\nboard_build.partitions = default_16MB.csv\nboard_build.filesystem = littlefs\nmonitor_speed = 115200\nbuild_flags = -DCORE_DEBUG_LEVEL=2\nDrop the redundant memory_type, BOARD_HAS_PSRAM and CDC flags, because the Plus JSON already sets them. If more filesystem space is wanted, app3M_fat9M_16MB.csv or large_spiffs_16MB.csv also exist locally.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "The platformio.ini uses the wrong board. 'seeed_xiao_esp32s3' + 'default_16MB.csv' builds and boots after a PlatformIO USB upload (esptool '--flash-size detect' patches the bootloader header to 16MB), but bootloader.bin and firmware.factory.bin carry an 8MB header; flashed with flash-size 'keep' (ESP Web Tools, and also esptool's own CLI default) the 2nd-stage bootloader rejects the table ('partition ... exceeds flash chip size 0x800000', app1 ends at 0xC90000) and reset-loops. Correct board id is 'seeed_xiao_esp32_s3_plus', which exists only in the pioarduino platform (not in the official PlatformIO registry platform), so the platform URL must be pinned to the 55.03.38-1 release zip. Keep board_build.partitions = default_16MB.csv (the Plus JSON still defaults to default_8MB.csv) and keep lib_deps/upload_speed, which the researcher's replacement snippet dropped; BOARD_HAS_PSRAM, memory_type and CDC flags can go because the Plus JSON sets them.",
+    "reasoning": "Every link of the chain re-read locally and upstream; no contrary evidence.\nplatformio.ini: board = seeed_xiao_esp32s3, board_build.partitions = default_16MB.csv, platform = espressif32 (unpinned). seeed_xiao_esp32s3.json: upload.flash_size '8MB', maximum_size 8388608, variant XIAO_ESP32S3. seeed_xiao_esp32_s3_plus.json: flash_size '16MB', maximum_size 16777216, -DARDUINO_XIAO_ESP32S3_PLUS, variant XIAO_ESP32S3_Plus, memory_type qio_opi, already carries -DBOARD_HAS_PSRAM, -DARDUINO_USB_MODE=1, -DARDUINO_USB_CDC_ON_BOOT=1 (so dropping those flags is correct). NOTE: the Plus JSON still defaults 'partitions': 'default_8MB.csv', so board_build.partitions = default_16MB.csv must stay.\nBuilder: pioarduino-build.py line 251 'gen_esp32part.py -q $SOURCE $TARGET' (no --flash-size); lines 108-109 bootloader elf2image '--flash-size', board_config.get('upload.flash_size','4MB'); main.py 905-906 same for the app image; 1625/1636 merge-bin '--flash-size', flash_size for firmware.factory.bin; 1782-1783 upload uses '--flash-size','detect'. esptool 5.2.0 cmds.py _update_image_flash_params patches the header (and SHA) only for the image at the bootloader offset and only when flash_size != 'keep'; the esptool CLI default for write-flash is 'keep' (__init__.py: default=os.environ.get('ESPTOOL_FS','keep' ...)), and ESP Web Tools flash.ts calls writeFlash with flashSize: 'keep'. So BOTH a web flasher and a plain 'esptool write-flash 0x0 firmware.factory.bin' leave the 8MB header.\nBootloader (IDF v5.5): bootloader_flash_config_esp32s3.c update_flash_config() derives size from bootloader_hdr->spi_size and calls esp_rom_spiflash_config_param(..., size*0x100000, ...); flash_partitions.c: 'uint32_t chip_size = g_rom_flashchip.chip_size;' ... 'if (pos->offset > chip_size || pos->offset + pos->size > chip_size)' -> 'partition %d invalid - offset 0x%x size 0x%x exceeds flash chip size 0x%x', returns ESP_ERR_INVALID_SIZE; bootloader_utility.c: 'Failed to verify partition table' -> return false -> reset loop. default_16MB.csv: app1 0x650000+0x640000 = 0xC90000 > 0x800000 (recomputed), spiffs 0xC90000+0x360000, coredump 0xFF0000. The boot loop is a source-level inference (not run on hardware) but the path is unambiguous.\nVariant diff re-run: base variant lacks TX1/RX1, MOSI1/MISO1/SCK1, ADC_BAT/BAT_VOLT_PIN, D11-D19 (and USB_PID differs 0x0056 vs 0x0063).\nPlatform pin: .piopm uri = https://github.com/pioarduino/platform-espressif32/releases/download/55.03.38-1/platform-espressif32.zip; the official platformio/platform-espressif32 develop branch has only seeed_xiao_esp32c3/c6/s3 JSONs (GitHub API listing; seeed_xiao_esp32_s3_plus.json returns 404), so 'platform = espressif32' on another machine would fail with unknown board once the board id is fixed; pinning is required, not optional.\nOne defect in the recommended snippet: it omits lib_deps (GxEPD2, Adafruit GFX) and upload_speed; pasted as a replacement env it will not build. Keep those two keys.",
+    "sources": [
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/platformio.ini",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32s3.json",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32_s3_plus.json",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/builder/main.py",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/tools/pioarduino-build.py",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/tools/partitions/default_16MB.csv",
+     "/Users/fabriziodrago/.platformio/packages/tool-esptoolpy/esptool/cmds.py",
+     "/Users/fabriziodrago/.platformio/packages/tool-esptoolpy/esptool/__init__.py",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/.piopm",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5/components/bootloader_support/src/flash_partitions.c",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5/components/bootloader_support/bootloader_flash/src/bootloader_flash_config_esp32s3.c",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5/components/bootloader_support/src/bootloader_utility.c",
+     "https://raw.githubusercontent.com/esphome/esp-web-tools/main/src/flash.ts",
+     "https://api.github.com/repos/platformio/platform-espressif32/contents/boards?ref=develop"
+    ]
+   }
+  }
+ ],
+ "unknowns": [
+  "Whether the FTS02 adapter or the touch FPC carries pull-ups on SDA, SCL, RST and INT, an RC on RST, or any level shifting. This decides whether GT911 RST stays high when GPIO43/44 go hi-Z in deep sleep. The GT911 datasheet says an external 10K pull-up on RST is 'required'.",
+  "GT911 INT output type and pulse width in Normal and Green mode. Push-pull is inferred from the VOH spec, and the datasheet gives '>250us or a high level' only for Gesture mode. It is not verified that the ext1 level-wake latches on such short pulses; it may need the INT level mode or Gesture/Doze mode.",
+  "The real battery-side sleep current through the Seeed driver board. It is the sum of the ETA9740 boost at no load, the SGM40567 charger with VBUS present and no cell, the 100k resistor on VBUS, and the SGM6029. No published measurement was found, and the SGM40567 and SGM6029 quiescent currents were not looked up.",
+  "Whether the ETA9740 boost shuts down or hiccups at very light load. The datasheet does not mention load-removal detection. This must be observed on hardware with the ESP32 in deep sleep.",
+  "The exact topology of the driver board's slide switch (the scan reads battery-side, but the image is ambiguous). This also decides whether charging works with the switch off.",
+  "Whether the driver board's CN1/CN2 breakout headers are populated, and whether the XIAO socket is female headers. That sets the clearance under the XIAO for wires to the underside pads.",
+  "How audible the 115200-baud ROM banner actually is on a KY-006 piezo if the buzzer goes on GPIO43.",
+  "Test conditions behind Seeed's 'Deep Sleep Mode: 3.8V/33.51 uA' figure for the Plus. No community measurement specific to the Plus was found.",
+  "Whether the official PlatformIO registry 'espressif32' platform contains a XIAO ESP32S3 Plus board definition (not checked). The local one is pioarduino 55.03.38-1.",
+  "Whether gpio_hold_en + gpio_deep_sleep_hold_en on GPIO43 also masks the ROM UART banner on the pad at wake. The docs only say digital pads are 'reset to default state' on wake."
+ ],
+ "questions_for_user": [
+  "Do you want the board to wake from deep sleep by touching the screen? The GT911 must then stay in Green/Doze mode at about 0.8-3.3 mA continuously, roughly 2-5 months on 4000 mAh. Or is the driver board's slide switch plus an idle timeout enough, possibly with a physical wake button?",
+  "Are you, and the MakerWorld builders, OK soldering 1-4 thin wires to the underside pads of the XIAO Plus (GPIO10 for the battery ADC, GPIO11-13 for a wake button or other buttons)? All 11 edge pins are already used. Without the pads, a battery gauge or any button means dropping the buzzer or TP_RST.",
+  "Did you order the XIAO ESP32-S3 Plus with pre-soldered headers or bare? Underside-pad wiring is much easier before the headers go on. Does it plug into a socket on the driver board or get soldered down?",
+  "Buzzer placement: is a faint tick at every power-on or wake acceptable (buzzer on D6/TX, RST stays on D7)? Or do you prefer the silent variant (buzzer on D7/RX, GT911 RST on D6, which gets harmless glitches during the boot banner)? Is the buzzer essential at all?",
+  "How will end users flash the release: PlatformIO over USB only, or a prebuilt factory .bin through a web flasher or esptool? The second case makes the correct 16MB flash header (the Plus board id) mandatory.",
+  "Do you have a way to measure uA-to-mA currents (a multimeter with a uA range, a Nordic PPK2, or similar) to validate sleep current through the driver board once the parts arrive?",
+  "Do you need battery percentage on screen for v1? That requires adding a 2-resistor divider from the driver board's BAT_4V2 pad (H1) to an ADC pin. Or can the gauge slip to a later hardware revision?"
+ ]
+}

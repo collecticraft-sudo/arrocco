@@ -1,0 +1,492 @@
+{
+ "summary": "Lichess Board API on the XIAO ESP32-S3 Plus is feasible with Arduino core 3.3.8, but three things must be designed in from the start: (1) TLS memory is INTERNAL-RAM only in the prebuilt Arduino libs (verified in the local sdkconfig: CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y, 16 KB in + 16 KB out buffers, no dynamic buffers; Espressif quotes ~42 KB heap per connection), so cap the design at 2 concurrent TLS sessions (1 stream + 1 request connection) and treat a 3rd as transient; (2) the installed core 3.3.8 still contains the NetworkClientSecure bug where stop() wipes the CA-bundle callback, so every reconnect with setCACertBundle fails unless the bundle is re-set before each connect() -- or use esp_http_client (headers + default cert bundle are present in the prebuilt libs and it de-chunks for you); (3) Lichess answers HTTP/1.1 with Transfer-Encoding: chunked and Arduino HTTPClient::getStream() does NOT de-chunk (verified in local source); I verified live that an HTTP/1.0 request gets an un-chunked real-time ndjson stream. API facts verified today from the lichess-org/api OpenAPI spec and lila source: seeks need Rapid or slower (initial + 40*inc >= 480 s), AI / direct challenges also allow Blitz (>= 180 s) and unlimited/correspondence; a token with only board:play covers event stream, seek, game stream, moves and all challenge endpoints; personal tokens are still supported; keep-alive is an empty line every 7 s on event and game streams; only one event stream per token. Lichess today serves a Let's Encrypt 'Generation Y' ECDSA chain (YE1 -> ISRG Root YE -> X2 -> X1), so pinning a single root is fragile: use the IDF bundle (contains X1 and X2, not Root YE). Big UX finding: lila does NOT reject http:// LAN redirect URIs for OAuth PKCE (only shows a 'Does not use a secure connection' warning), so a 'Login with Lichess' flow via QR code on the e-ink is possible and avoids pasting a token; the phone has no internet while joined to the ESP SoftAP, so token entry must happen in a second stage over the home LAN, not inside the captive portal. Puzzles: daily/by-id need no auth and already include fen + lastMove (verified live, 932 bytes); offline packs must come from the CC0 CSV database, not the API. Existing ESP32 Lichess projects (OPENCHESSBOARD_WiFi, omercier01/Chessboard, joojoooo/OpenChess) all use setInsecure() and ad-hoc chunk skipping; useful as flow references, not as code to copy (OpenChess mods are PolyForm-Noncommercial, GPL-incompatible).",
+ "findings": [
+  {
+   "id": "L01",
+   "claim": "Board API time controls: public seeks require Rapid or slower (estimated duration = initial_s + 40*increment_s >= 480 s). Games vs Lichess AI, direct (friend) challenges, API-sourced games and bulk pairing may also be Blitz (>= 180 s). Games without a clock (correspondence / unlimited) are always Board-compatible. Bullet/UltraBullet are never playable. Variant is not restricted by the compatibility check (clock only).",
+   "evidence": "API spec Board tag: 'Time controls: Rapid, Classical and Correspondence only. For direct challenges, games vs AI, and bulk pairing, Blitz is also possible.' lila source modules/core/.../misc.scala: 'def isBoardCompatible(clock: Clock.Config): Boolean = Speed(clock) >= Speed.Rapid'; modules/game/.../Game.scala: 'game.clockConfig.forall: c => lila.core.game.isBoardCompatible(c) || { (game.hasAi || game.sourceIs(_.Friend) || game.sourceIs(_.Api)) && chess.Speed(c) >= Speed.Blitz }'. lichess.org/faq: duration = initial + 40 x increment; Bullet <=179 s, Blitz <=479 s, Rapid <=1499 s, Classical >=1500 s (5+3 = 420 s = Blitz, so NOT seekable; 5+5 = 500 s and 10+0 = 600 s are Rapid). Seek params: time 0-180 min, increment 0-180 s, days enum 1,2,3,5,7,10,14. AI params: level 1-8, clock.limit 0-10800 s, clock.increment 0-60 s, omit clock => correspondence/unlimited.",
+   "sources": [
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/lichess-api.yaml",
+    "https://raw.githubusercontent.com/lichess-org/lila/master/modules/game/src/main/Game.scala",
+    "https://raw.githubusercontent.com/lichess-org/lila/master/modules/core/src/main/game/misc.scala",
+    "https://lichess.org/faq",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-board-seek.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/challenges/api-challenge-ai.yaml"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "In the UI offer only legal presets: seeks 10+0, 10+5, 15+10, 30+0, correspondence; vs-AI and friend challenges additionally 3+2, 5+0, 5+3 and 'no clock'. Validate with (limit + 40*inc) >= 480 (seek) / >= 180 (AI, friend) before sending. 'No clock vs Stockfish level N' is the ideal relaxed e-ink mode. Always check game.compat.board == true in the gameStart event before opening the game stream.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As claimed: public seeks need estimated duration (limit_s + 40*inc_s) >= 480 s (Rapid+); vs-AI, friend challenges and API/bulk games also allow Blitz (>= 180 s); no-clock games are always Board-compatible; Bullet/UltraBullet never. Additions: for /api/challenge/* clock.limit must be one of 0,15,30,45,60,90 or a multiple of 60 up to 10800 (increment 0-60); only one seek stream per user may be open at a time; a seek with a fixed colour can be rejected with 400 'You must also play some games as <color>' (default to color=random); seeks cannot use the fromPosition variant.",
+    "reasoning": "Re-read primary sources myself. lila modules/core/.../misc.scala: `def isBoardCompatible(clock: Clock.Config): Boolean = Speed(clock) >= Speed.Rapid`. lila modules/game/.../Game.scala: `game.clockConfig.forall: c => lila.core.game.isBoardCompatible(c) || { (game.hasAi || game.sourceIs(_.Friend) || game.sourceIs(_.Api)) && chess.Speed(c) >= Speed.Blitz }` (forall on Option => no clock = always compatible). scalachess Clock.scala: `def estimateTotalSeconds: Int = limitSeconds + 40 * incrementSeconds`; Speed.scala ranges UltraBullet 0-29, Bullet 30-179, Blitz 180-479, Rapid 480-1499, Classical 1500-21599. So 5+3=420 s=Blitz (not seekable), 10+0=600 s Rapid: arithmetic correct. Seek enforcement is in SetupForm.boardApiHook: `allowFastGames || hook.makeClock.exists(lila.core.game.isBoardCompatible) || hook.makeDaysPerTurn.isDefined` (allowFastGames only for Lichess mobile/takex3 signed clients). Spec Board tag lines 132-133 quoted verbatim match. Seek spec: time 0-180, increment 0-180, days enum 1,2,3,5,7,10,14; AI spec: level 1-8, clock.limit 0-10800, clock.increment 0-60, 201 response. Extra constraints the researcher did not mention (all from lila source): (a) API clock.limit is NOT any integer: ApiConfig.clockLimitSeconds = Set(0,15,30,45,60,90) ++ multiples of 60 up to 10800; (b) only ONE seek stream per user at a time (Limiters.boardApiConcurrency maxConcurrency = 1, ttl 10 min); (c) the seek endpoint can answer 400 'You must also play some games as <color>' when a colour is always forced; (d) seek variants exclude fromPosition (boardApiVariants).",
+    "sources": [
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/core/src/main/game/misc.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/game/src/main/Game.scala",
+     "https://raw.githubusercontent.com/lichess-org/scalachess/master/core/src/main/scala/Speed.scala",
+     "https://raw.githubusercontent.com/lichess-org/scalachess/master/core/src/main/scala/Clock.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/setup/src/main/SetupForm.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/setup/src/main/ApiConfig.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/web/src/main/Limiters.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/app/controllers/Setup.scala",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/lichess-api.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-board-seek.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/challenges/api-challenge-ai.yaml"
+    ]
+   }
+  },
+  {
+   "id": "L02",
+   "claim": "A token with the single scope board:play is sufficient for the whole play flow (event stream, seek, game stream, move, resign, draw, claim-victory, create/accept/decline challenge, challenge AI). Puzzles need puzzle:read (next/batch GET) and puzzle:write (submit results); daily puzzle and puzzle-by-id need no auth. Personal access tokens are still supported. Tokens must be treated as opaque: regex ^[A-Za-z0-9_]+$, handle >= 512 chars, do not rely on the 'lip_' prefix.",
+   "evidence": "Spec security lists: /api/stream/event OAuth2: [challenge:read, bot:play, board:play]; /api/board/seek, game/stream, move: [board:play]; /api/challenge/ai, /api/challenge/{username}, accept: [challenge:write, bot:play, board:play]; /api/puzzle/next and GET batch: [puzzle:read]; POST batch: [puzzle:write]; /api/puzzle/daily: empty security array. Spec text: 'Personal API access tokens allow you to quickly interact with Lichess API without going through an OAuth flow' (https://lichess.org/account/oauth/token). 'Access tokens and authorization codes match ^[A-Za-z0-9_]+$. The length of tokens can be increased without notice. Make sure your application can handle at least 512 characters. By convention tokens have a recognizable prefix, but do not rely on this.' lila OAuthToken.scala create action pre-fills from query: description and scopes[] .",
+   "sources": [
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/lichess-api.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-stream-event.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/challenges/api-challenge-challengeId-accept.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/puzzles/api-puzzle-batch-angle.yaml",
+    "https://raw.githubusercontent.com/lichess-org/lila/master/app/controllers/OAuthToken.scala"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Request only board:play (+ puzzle:read, puzzle:write when phase 4 lands). Token buffer 513 bytes, validate only charset, never the prefix (OAuth tokens are not 'lip_'). Give the user a pre-filled link/QR: https://lichess.org/account/oauth/token/create?scopes[]=board:play&scopes[]=puzzle:read&scopes[]=puzzle:write&description=eink-chess . Validate the token right after entry with GET /api/account and show the username on the e-ink.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "board:play alone covers the entire play flow (event stream, seek, game stream, move, resign, abort, draw, takeback, claim-victory/draw, chat, create/accept/decline/cancel challenge, challenge AI); /api/account and /api/account/playing accept any token. Puzzle next / batch-get / batch-solve also work anonymously (AnonOrScoped in lila); puzzle:read is needed only to get puzzles matched to the user's rating and never-seen-before, puzzle:write only to record results on the account. Daily puzzle and puzzle-by-id need no auth. Personal tokens still supported; treat tokens as opaque ^[A-Za-z0-9_]+$, >= 512 chars, no prefix assumption.",
+    "reasoning": "I grepped the `security:` block of every per-endpoint YAML in lichess-org/api master: stream/event [challenge:read, bot:play, board:play]; board seek/stream/move/resign/abort/draw/takeback/claim-victory/claim-draw/chat all [board:play]; challenge ai/{username}/accept/decline/cancel [challenge:write, bot:play, board:play]; puzzle next and batch GET [puzzle:read], batch POST [puzzle:write]; puzzle daily and puzzle/{id} `security: []`; /api/account and /api/account/playing `OAuth2: []` (any token). Spec lines 61, 97-99 match the quotes on personal tokens, ^[A-Za-z0-9_]+$, 512 chars, prefix not reliable. lila app/controllers/OAuthToken.scala `create` pre-fills `description = ~get(\"description\")` and `scopes = (~ctx.req.queryString.get(\"scopes[]\")).toList`, so the pre-filled link format is right. One imprecision: lila Puzzle.scala declares `apiNext = AnonOrScoped(_.Puzzle.Read)`, `apiBatchSelect = AnonOrScoped(_.Puzzle.Read, _.Web.Mobile)`, `apiBatchSolve = AnonOrScopedBody(...)(_.Puzzle.Write, ...)` and the spec says 'If authenticated, only returns puzzles that the user has never seen before' / 'or 1500 if anonymous' -- so these endpoints also work with NO token; the scopes are only needed to tie puzzles/results to the account.",
+    "sources": [
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/lichess-api.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-stream-event.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/challenges/api-challenge-challengeId-accept.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/puzzles/api-puzzle-next.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/puzzles/api-puzzle-batch-angle.yaml",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/app/controllers/Puzzle.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/app/controllers/OAuthToken.scala"
+    ]
+   }
+  },
+  {
+   "id": "L03",
+   "claim": "Rate limiting / concurrency rules: make only one request at a time; on HTTP 429 wait at least a full minute; only ONE event stream per access token may be open (a new one kills the previous). Lichess eBoard policy requires use of the official Board API (we comply) and forbids any engine assistance during games.",
+   "evidence": "Spec: 'All requests are rate limited using various strategies... Only make one request at a time. If you receive an HTTP response with a 429 status, you have exceeded one of the rate limits. In most cases, waiting one minute before retrying will be sufficient, but some limits may require longer.' api-stream-event.yaml: 'Only one global event stream can be active at a time. When the stream opens, the previous one with the same access token is closed.' lila EventStream.scala: Bus.publishDyn(PoisonPill, s\"eventStreamForBearer:$bearer\"). lichess.org/page/eboards: 'the board software must make use of the official Board API' / non-compliant boards 'will likely result in your account being banned'. Board tag: 'Engine play or assistance is forbidden'.",
+   "sources": [
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/lichess-api.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-stream-event.yaml",
+    "https://raw.githubusercontent.com/lichess-org/lila/master/modules/api/src/main/EventStream.scala",
+    "https://lichess.org/page/eboards"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Serialize all POST/GET requests through one queue/task. Implement a global 'penalty box': on any 429 stop all requests for 60 s (double on repeat). Use a dedicated token per device (sharing a token with another app would make the two kick each other's event stream). Hard-lock the CT-800 engine (hints, eval, analysis) while an online game is active and say so in the README -- the device ships with an engine, so this must be visibly enforced.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As claimed. Note 'wait one minute' is the documented typical value ('some limits may require longer'), so the 60 s penalty box should grow on repeated 429s.",
+    "reasoning": "Spec lines 42-49 read verbatim: 'Only make one request at a time... 429... In most cases, waiting one minute before retrying will be sufficient, but some limits may require longer.' api-stream-event.yaml: 'Only one global event stream can be active at a time. When the stream opens, the previous one with the same access token is closed.' lila EventStream.scala lines 42-43: `val killChannel = s\"eventStreamForBearer:$bearer\"; Bus.publishDyn(PoisonPill, killChannel)` -- so it is per bearer token, exactly as claimed. lichess.org/page/eboards fetched: 'the board software must make use of the official Board API' and 'will likely result in your account being banned'; spec line 120: 'Engine play or assistance is forbidden'. Related fact I found: the game stream is also single-instance per game+User-Agent (GameStateStream.scala `uniqChan = s\"gameStreamFor:${pov.fullId}:$ua\"`, 'terminate previous one if any'), so a reconnect cleanly replaces a half-dead stream.",
+    "sources": [
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/lichess-api.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-stream-event.yaml",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/api/src/main/EventStream.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/bot/src/main/GameStateStream.scala",
+     "https://lichess.org/page/eboards"
+    ]
+   }
+  },
+  {
+   "id": "L04",
+   "claim": "Exact flow and endpoints. Base https://lichess.org, header 'Authorization: Bearer <token>', POST bodies are application/x-www-form-urlencoded. (1) GET /api/stream/event (ndjson: gameStart, gameFinish, challenge, challengeCanceled, challengeDeclined; on open it replays all ongoing games and pending challenges). (2a) POST /api/board/seek (rated, time[min], increment[s], variant, color, ratingRange) -- response is a stream that must be KEPT OPEN to keep the seek alive; closing cancels it; server closes when paired/expired; open the event stream FIRST. (2b) POST /api/challenge/ai (level 1-8, clock.limit[s], clock.increment[s], days, color, variant, fen) -> 201 with game id. (2c) POST /api/challenge/{username} (same clock params, rated, keepAliveStream, rules); real-time challenges expire after 20 s unless keepAliveStream is used; incoming: POST /api/challenge/{id}/accept | /decline. (3) GET /api/board/game/stream/{gameId}: first line always gameFull (id, variant, clock{initial,increment ms}, speed, rated, white, black, initialFen, state), then gameState (moves = full UCI move list space-separated, wtime/btime/winc/binc in ms, status, winner, wdraw/bdraw, wtakeback/btakeback, expiration{idleMillis, millisToMove}), chatLine, opponentGone{gone, claimWinInSeconds}; server closes the stream at game end. (4) POST /api/board/game/{id}/move/{uci}?offeringDraw=true|false; /resign; /abort; /draw/{yes|no}; /takeback/{yes|no}; /claim-victory; /claim-draw; /chat. GET /api/account/playing lists ongoing games (useful at boot to resume).",
+   "evidence": "Quoted from the per-endpoint YAML files in lichess-org/api master (api-board-seek.yaml: 'Keep the connection open to keep the seek active. If the client closes the connection, the seek is canceled... We recommend opening the Event stream first, then the seek stream'; api-board-game-stream-gameId.yaml: 'The first line is always of type gameFull. The server closes the stream when the game ends, or if the game has already ended.'; GameStateEvent.yaml field descriptions 'Integer of milliseconds White has left on the clock', expiration.millisToMove 'Time each player has to make their first move, before the game is aborted'; api-board-game-gameId-move-move.yaml 'The move to play, in UCI format' + query offeringDraw; draw-accept: 'yes: Offer a draw, or accept the opponent's draw offer. no: Decline'). gameStart example contains fen, color, lastMove, isMyTurn, secondsLeft, compat{bot,board}.",
+   "sources": [
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-board-seek.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-board-game-stream-gameId.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/schemas/GameStateEvent.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/schemas/GameFullEvent.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-board-game-gameId-move-move.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/challenges/api-challenge-username.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/examples/stream-gameStart.json.yaml"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Model the online layer as a state machine: IDLE -> EVENT_STREAM_OPEN -> (SEEKING | CHALLENGING) -> GAME_STREAM_OPEN -> FINISHED. Because gameState always carries the full move list, make the board state a pure function of 'moves' (replay from initialFen on every line): reconnects and missed lines then need no special handling. Show a first-move countdown from expiration.millisToMove (e-ink users are slow; the game is aborted otherwise). Wire opponentGone.claimWinInSeconds to a 'Claim win' button.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As claimed. Add for the 'replay from initialFen' design: gameFull.initialFen is the literal \"startpos\" for normal games (must be special-cased), and in standard chess Lichess emits castling as e1g1/e1c1/e8g8/e8c8 (legacyStandardCastling = true); king-to-rook notation only appears in Chess960. keepAliveStream challenges end with a {\"done\":\"accepted|declined|canceled\"} line.",
+    "reasoning": "Read each YAML raw. Paths in lichess-api.yaml lines 643-676 and 712-736 match (/api/stream/event, /api/board/seek, /api/board/game/stream/{gameId}, .../move/{move}, /chat, /abort, /resign, /draw/{accept}, /takeback/{accept}, /claim-victory, /claim-draw, also /berserk; /api/challenge/ai, /{username}, /{id}/accept|decline|cancel; /api/account/playing). Request bodies are `application/x-www-form-urlencoded` (seek line 32, AI line 15, challenge). Seek text verbatim: 'Keep the connection open to keep the seek active... If the client closes the connection, the seek is canceled... When the seek is accepted, or expires, the server closes the connection... We recommend opening the Event stream first'. Challenge: 'Challenges for realtime games (not correspondence) expire after 20s if not accepted. To prevent that, use the keepAliveStream flag'. AI: '201'. Game stream: 'The first line is always of type gameFull. The server closes the stream when the game ends, or if the game has already ended.' GameStateEvent/GameFullEvent/OpponentGoneEvent field lists match the claim (wtime/btime/winc/binc ms, wdraw/bdraw, wtakeback/btakeback, expiration{idleMillis,millisToMove}; clock{initial,increment} ms; gone, claimWinInSeconds). Event stream: 'When the stream opens, all current challenges and games are sent.' Two implementation details worth adding (from lila BotJsonView.scala): `\"initialFen\" -> fen.fold(\"startpos\")(_.value)` -- the literal string 'startpos', not a FEN, for normal games; and `UciDump(game.sans, fen, game.variant, legacyStandardCastling = true)` -- standard games send castling as e1g1/e1c1, only Chess960 uses king-takes-rook.",
+    "sources": [
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/lichess-api.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-board-seek.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-board-game-stream-gameId.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-board-game-gameId-move-move.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-board-game-gameId-draw-accept.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/challenges/api-challenge-username.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/challenges/api-challenge-ai.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/schemas/GameStateEvent.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/schemas/GameFullEvent.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/schemas/OpponentGoneEvent.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/examples/stream-gameStart.json.yaml",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/bot/src/main/BotJsonView.scala"
+    ]
+   }
+  },
+  {
+   "id": "L05",
+   "claim": "Stream count and keep-alive: both the event stream and the board game stream emit an empty line every 7 seconds; the seek stream emits periodic empty lines too. While seeking you need 2 long-lived HTTPS streams (event + seek). While playing you need 1-2 long-lived streams (game stream, optionally event stream) plus one request connection for moves => 2 concurrent TLS sessions minimum, 3 if the event stream stays open.",
+   "evidence": "api-stream-event.yaml: 'An empty line is sent every 7 seconds for keep alive purposes.' lila EventStream.scala: scheduler.scheduleOnce(7.second, self, CheckOnline); lila GameStateStream.scala: 7.second interval and queue.offer(None) with comment that it 'prevents the client and intermediate proxies from closing the idle stream'. api-board-seek.yaml ndjson schema: 'A periodic empty line until the seek is accepted by another player, at which point the connection closes'. Existing MCU projects (OPENCHESSBOARD_WiFi: 'WiFiClientSecure StreamClient; WiFiClientSecure PostClient;'; omercier01: httpClientStream + httpClientApi) run exactly 2 clients and discover the game by polling /api/account/playing instead of holding the event stream.",
+   "sources": [
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-stream-event.yaml",
+    "https://raw.githubusercontent.com/lichess-org/lila/master/modules/bot/src/main/GameStateStream.scala",
+    "https://raw.githubusercontent.com/lichess-org/lila/master/modules/api/src/main/EventStream.scala",
+    "https://raw.githubusercontent.com/TimoKropp/OPENCHESSBOARD_WiFi/main_nano_esp32/src/wifi_app.cpp"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Design for max 2 simultaneous TLS sessions: close the event stream as soon as gameStart arrives and reopen it when the game stream closes (you lose in-game challenge/rematch notifications, acceptable). Use the 7 s keep-alive as a liveness watchdog: no byte for 20-25 s => socket is dead, tear down and reconnect with backoff 1,2,4,...,60 s. Count keep-alive newlines as traffic; never feed empty lines to the JSON parser.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As claimed. Nuance: while SEEKING a third connection is not needed (no moves yet), so the true peak is 2 sessions if the event stream is closed once gameStart arrives, 3 only if event stream + game stream + a POST connection coexist. vs-AI and friend-challenge flows never need the seek stream at all.",
+    "reasoning": "api-stream-event.yaml: 'An empty line is sent every 7 seconds for keep alive purposes.' lila EventStream.scala line 91 `scheduler.scheduleOnce(7.second, self, CheckOnline)` and line 94 `queue.offer(None) // prevents the client and intermediate proxies from closing the idle stream`. lila GameStateStream.scala lines 118-124: `case SetOnline => ... scheduleOnce(7.second, self, CheckOnline)` / `case CheckOnline => queue.offer(None) // prevents the client and intermediate proxies from closing the idle stream ... self ! SetOnline` -- so the game stream keep-alive is also 7 s (not stated in the public spec, only in source). Seek spec: 'A periodic empty line until the seek is accepted by another player, at which point the connection closes' (period not specified). OPENCHESSBOARD wifi_app.cpp lines 18-19: `WiFiClientSecure StreamClient; WiFiClientSecure PostClient;` with setInsecure() on both and polling of /api/account/playing in lichess_client.cpp; omercier01/Chessboard Chessboard.h lines 282-284: `httpClientStream` and `httpClientApi`. The 2-vs-3 TLS session count is the researcher's inference but follows directly from the flow (seek stream must stay open while the event stream is open; move POSTs need their own connection while the game stream is open).",
+    "sources": [
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-stream-event.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/board/api-board-seek.yaml",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/api/src/main/EventStream.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/bot/src/main/GameStateStream.scala",
+     "https://raw.githubusercontent.com/TimoKropp/OPENCHESSBOARD_WiFi/main_nano_esp32/src/wifi_app.cpp",
+     "https://raw.githubusercontent.com/TimoKropp/OPENCHESSBOARD_WiFi/main_nano_esp32/src/lichess_client.cpp",
+     "https://raw.githubusercontent.com/omercier01/Chessboard/main/Chessboard/Chessboard.h"
+    ]
+   }
+  },
+  {
+   "id": "L06",
+   "claim": "TLS memory on this exact toolchain: mbedTLS in the prebuilt Arduino-ESP32 3.3.8 libs (ESP-IDF v5.5.4) allocates from INTERNAL RAM only, with fixed 16384-byte IN and OUT record buffers, no dynamic buffers, TLS 1.2 only. PSRAM does not help TLS unless the libs are rebuilt. Espressif's own figure is ~42 KB heap per TLS connection in the default config (~22 KB with dynamic buffers, which are not enabled here). So 2 sessions ~ 85 KB, 3 sessions ~ 127 KB of internal heap, on top of the 48 KB GxEPD2 full-frame buffer (800x480/8) and WiFi.",
+   "evidence": "Local file ~/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig: 'CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y', '# CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC is not set', 'CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN=16384', '# CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN is not set', '# CONFIG_MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH is not set', no CONFIG_MBEDTLS_DYNAMIC_BUFFER line, 'CONFIG_MBEDTLS_SSL_PROTO_DTLS=y', '# CONFIG_MBEDTLS_SSL_PROTO_TLS1_3 is not set'; same in qio_opi/include/sdkconfig.h ('#define CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC 1'). Also CONFIG_SPIRAM_USE_MALLOC=y, CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096, CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y, CONFIG_LWIP_MAX_SOCKETS=16. versions.txt: 'esp-idf: v5.5.4', 'arduino: idf-v5.5.4'. ESP-IDF v5.5 mbedtls doc table: default 42196 B, dynamic buffers 22013 B. pioarduino platform.py/arduino.py in the installed platform support a 'custom_sdkconfig' option (hybrid compile) that can rebuild the libs.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/qio_opi/include/sdkconfig.h",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/versions.txt",
+    "https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/api-reference/protocols/mbedtls.html",
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/builder/frameworks/arduino.py"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Budget internal RAM explicitly: put the CT-800 hash table, piece bitmaps, JSON scratch and any big buffers in PSRAM (ps_malloc / heap_caps_malloc(MALLOC_CAP_SPIRAM)); keep max 2 TLS sessions; log heap_caps_get_free_size(MALLOC_CAP_INTERNAL) and largest free block before each connect and refuse to open a session below ~60 KB. Only if measurements force it, add pioarduino custom_sdkconfig (CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y; dynamic buffers additionally require disabling DTLS) -- this makes the build slower and less reproducible for MakerWorld users, so treat it as plan B.",
+   "verification": {
+    "verdict": "refuted",
+    "corrected_claim": "On the installed Arduino-ESP32 3.3.8 libs (ESP-IDF v5.5.4) mbedTLS BY DEFAULT allocates from internal RAM only (CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y), with fixed 16384-byte IN and OUT record buffers, no dynamic buffers (blocked by DTLS=y), TLS 1.2 only; Espressif's reference figure is ~42 KB heap per TLS session (22 KB with dynamic buffers, unavailable here), i.e. ~85 KB for 2 and ~127 KB for 3 sessions of internal heap next to the 48 KB GxEPD2 frame buffer and WiFi. BUT the prebuilt libmbedcrypto.a exports mbedtls_platform_set_calloc_free() (MBEDTLS_PLATFORM_MEMORY is enabled without the *_MACRO overrides), so mbedTLS allocations can be redirected to PSRAM at runtime with one call at boot -- no library rebuild / custom_sdkconfig needed. Plan B should be this runtime hook (measure handshake time with it), and only plan C the pioarduino hybrid compile.",
+    "reasoning": "PARTLY RIGHT, one decision-relevant sentence is wrong. Confirmed by reading the local files myself: sdkconfig lines 2723-2735 `CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=y`, `# CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC is not set`, `CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN=16384`, `# CONFIG_MBEDTLS_ASYMMETRIC_CONTENT_LEN is not set`, `# CONFIG_MBEDTLS_SSL_PROTO_TLS1_3 is not set`, `# CONFIG_MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH is not set`, `CONFIG_MBEDTLS_SSL_PROTO_DTLS=y`, no DYNAMIC_BUFFER line; qio_opi/include/sdkconfig.h line 1151 `#define CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC 1`; versions.txt `esp-idf: v5.5.4`; ESP-IDF v5.5.4 esp_mem.c: `#ifdef CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC return heap_caps_calloc(n, size, MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);`; Kconfig: MBEDTLS_DYNAMIC_BUFFER `depends on ... !MBEDTLS_SSL_PROTO_DTLS && !MBEDTLS_SSL_VARIABLE_BUFFER_LENGTH`; Espressif v5.5 doc table: Default 42196 B, Dynamic TX/RX 22013 B (measured on the https_request example with server validation). REFUTED: 'PSRAM does not help TLS unless the libs are rebuilt'. The installed esp_config.h (include/mbedtls/port/include/mbedtls/esp_config.h lines 128-134) defines `MBEDTLS_PLATFORM_MEMORY` with only `MBEDTLS_PLATFORM_STD_CALLOC esp_mbedtls_mem_calloc` / `STD_FREE` (no *_MACRO), and `nm -g lib/libmbedcrypto.a` shows `T mbedtls_platform_set_calloc_free` and `T mbedtls_calloc`. So the prebuilt library dispatches every allocation through a runtime-replaceable function pointer: calling `mbedtls_platform_set_calloc_free(my_calloc, free)` once at boot (my_calloc = heap_caps_calloc_prefer(n, sz, 2, MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT), or size-thresholded so only the 16 KB record buffers go to PSRAM) moves TLS memory to the 8 MB PSRAM with NO lib rebuild and no custom_sdkconfig. free() on ESP-IDF is heap-agnostic so mixing is safe. I grepped the Arduino core: nothing in cores/ or libraries/ already calls it. Not verified on hardware: handshake speed with PSRAM-resident bignum/record buffers and interaction with HW AES/SHA DMA (IDF uses bounce buffers for non-DMA-capable memory) -- expect some slowdown, must be measured.",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/qio_opi/include/sdkconfig.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/versions.txt",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/mbedtls/port/include/mbedtls/esp_config.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/mbedtls/mbedtls/include/mbedtls/platform.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/lib/libmbedcrypto.a",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5.4/components/mbedtls/port/esp_mem.c",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5.4/components/mbedtls/Kconfig",
+     "https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/api-reference/protocols/mbedtls.html"
+    ]
+   }
+  },
+  {
+   "id": "L07",
+   "claim": "BUG in the installed core 3.3.8: NetworkClientSecure loses the CA-bundle callback on stop(), so any reconnect of a client configured with setCACertBundle() fails with 'useRootCABundle is set, but attach_ssl_certificate_bundle(ssl, true); was not called!'. This hits precisely the reconnect path a Lichess stream client depends on. The upstream fix (PR #12615 for issue #12368) is NOT present in the local 3.3.8 sources.",
+   "evidence": "Local ~/.platformio/packages/framework-arduinoespressif32/libraries/NetworkClientSecure/src/ssl_client.cpp lines 385-396 in stop_ssl_socket(): saves only handshake_timeout, socket_timeout, last_error, then 'memset(ssl_client, 0, sizeof(sslclient_context));' (bundle_attach_cb is zeroed). NetworkClientSecure.cpp line 148: connect() calls start_ssl_client(..., _use_ca_bundle, ...) without re-attaching; ssl_client.cpp line 217 logs the error when bundle_attach_cb == NULL. package.json: \"version\": \"3.3.8\". GitHub issue #12368 (opened 2026-02-16, 'Affected v3.3.6 and likely earlier') describes the identical root cause; closed via PR #12615.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/NetworkClientSecure/src/ssl_client.cpp",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/NetworkClientSecure/src/NetworkClientSecure.cpp",
+    "https://github.com/espressif/arduino-esp32/issues/12368"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Either (a) call client.setCACertBundle(bundle_start, bundle_len) immediately before EVERY connect(), or (b) use setCACert() with a PEM string containing ISRG Root X1 + ISRG Root X2 (the PEM pointer survives stop()), or (c) preferred: use esp_http_client / esp_tls with .crt_bundle_attach = esp_crt_bundle_attach, which bypasses NetworkClientSecure entirely. Add a soak test that kills WiFi mid-stream and verifies TLS reconnect.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Bug confirmed in the installed core 3.3.8: NetworkClientSecure drops the CA-bundle callback on every stop() -- including the implicit stop() after any failed connect -- so every later connect of a setCACertBundle() client fails. It is FIXED upstream from Arduino-ESP32 3.3.9 onward (verified in tags 3.3.9 and 3.3.12), available as pioarduino platform 55.03.39 / 55.03.311 / 55.03.312. Preferred remedy: pin the platform to >= 55.03.39 instead of 55.03.38; workarounds (re-call setCACertBundle before each connect, setCACert PEM, or esp_http_client/esp_tls) only matter if staying on 3.3.8.",
+    "reasoning": "Read the local 3.3.8 source: ssl_client.cpp lines 385-396 in stop_ssl_socket() save only handshake_timeout, socket_timeout, last_error, then `memset(ssl_client, 0, sizeof(sslclient_context));` -- `bundle_attach_cb` (ssl_client.h line 29) is wiped. NetworkClientSecure.cpp: setCACertBundle() (lines 347-357) is the only caller of attach_ssl_certificate_bundle(); connect() (line ~148) calls start_ssl_client(..., _use_ca_bundle, ...) with no re-attach; ssl_client.cpp lines 209-217 then log 'useRootCABundle is set, but attach_ssl_certificate_bundle(ssl, true); was not called!'. Note connect() also calls stop() internally on ANY failed connect, so one transient failure permanently breaks the client, not just explicit reconnects (HTTPClient redirects too). package.json version 3.3.8. GitHub issue #12368 (opened 2026-02-16, 'Affected v3.3.6', same root cause) closed by PR #12615 'NetworkClientSecure: keep CA bundle after stop', merged 2026-05-27. NEW and important: I diffed upstream tags -- 3.3.8 has no preservation, while tags 3.3.9 and 3.3.12 contain `crt_bundle_attach_cb bundle_attach_cb = ssl_client->bundle_attach_cb;` (line 406) and `ssl_client->bundle_attach_cb = bundle_attach_cb;` (line 414). pioarduino 55.03.39 (2026-06-04) ships core 3.3.9, 55.03.311 ships 3.3.11, 55.03.312 (2026-09-20) ships 3.3.12; all release zips return HTTP 200. So the cheapest fix is a platform bump, not a code workaround.",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/NetworkClientSecure/src/ssl_client.cpp",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/NetworkClientSecure/src/NetworkClientSecure.cpp",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/package.json",
+     "https://github.com/espressif/arduino-esp32/issues/12368",
+     "https://github.com/espressif/arduino-esp32/pull/12615",
+     "https://raw.githubusercontent.com/espressif/arduino-esp32/3.3.9/libraries/NetworkClientSecure/src/ssl_client.cpp",
+     "https://raw.githubusercontent.com/espressif/arduino-esp32/3.3.12/libraries/NetworkClientSecure/src/ssl_client.cpp",
+     "https://raw.githubusercontent.com/pioarduino/platform-espressif32/55.03.39/platform.json",
+     "https://raw.githubusercontent.com/pioarduino/platform-espressif32/55.03.312/platform.json"
+    ]
+   }
+  },
+  {
+   "id": "L08",
+   "claim": "Certificate handling: do not pin a single root. As of 2026-09-21 lichess.org serves an ECDSA P-256 leaf from Let's Encrypt intermediate 'YE1' under the new root 'ISRG Root YE', cross-signed by ISRG Root X2, itself cross-signed by ISRG Root X1; leaf validity is 90 days (2026-08-02 to 2026-10-31). TLS 1.2 with ECDHE-ECDSA-AES256-GCM-SHA384 is accepted (needed because TLS 1.3 is disabled in the Arduino libs). The default Mozilla bundle IS embedded in the prebuilt libmbedtls.a and contains ISRG Root X1 and X2 but not ISRG Root YE, so validation depends on the server continuing to send the cross-signed chain. Certificate dates are not checked by this mbedTLS build, so no NTP sync is required before TLS.",
+   "evidence": "openssl s_client -connect lichess.org:443 -showcerts today: '0 s:CN=mta-sts.lichess.org i:C=US, O=Let's Encrypt, CN=YE1 / 1 s:...CN=YE1 i:C=US, O=ISRG, CN=Root YE / 2 s:...CN=Root YE i:...CN=ISRG Root X2 / 3 s:...CN=ISRG Root X2 i:...CN=ISRG Root X1', 'Server public key is 256 bit', SAN includes DNS:lichess.org; with -tls1_2: 'New, TLSv1.2, Cipher is ECDHE-ECDSA-AES256-GCM-SHA384', 'Verification: OK'. Local sdkconfig: CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y, CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y, CONFIG_MBEDTLS_ECDSA_C=y, CONFIG_MBEDTLS_ECP_DP_SECP256R1_ENABLED=y, CONFIG_MBEDTLS_ECP_DP_SECP384R1_ENABLED=y, CONFIG_MBEDTLS_GCM_C=y, CONFIG_MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA=y, '# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set'. grep on lib/libmbedtls.a: symbols _binary_x509_crt_bundle_start/_end present; strings 'ISRG Root X1' and 'ISRG Root X2' present, 'ISRG Root YE' absent. NetworkClientSecure.h line 76: 'void setCACertBundle(const uint8_t *bundle, size_t size);' (needs an explicit pointer: extern const uint8_t b[] asm(\"_binary_x509_crt_bundle_start\")). esp_crt_bundle.h: esp_crt_bundle_attach 'will default to the bundle defined in menuconfig' when no bundle was set.",
+   "sources": [
+    "openssl s_client -connect lichess.org:443 (run 2026-09-21)",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/lib/libmbedtls.a",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/NetworkClientSecure/src/NetworkClientSecure.h",
+    "https://github.com/espressif/arduino-esp32/issues/10949"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Use the embedded IDF cert bundle (esp_crt_bundle_attach) as the trust store; keep a fallback PEM with ISRG Root X1 + X2 compiled in. Never ship setInsecure() (all existing ESP32 Lichess projects do; a bearer token travels on that connection). Make trust-store updates part of OTA. First hardware test: confirm the 4-cert Gen-Y chain validates against the bundle on IDF 5.5.4.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As claimed. Precision: the embedded bundle is 68,983 bytes inside lib/libmbedtls.a (symbols _binary_x509_crt_bundle_start/_end), contains ISRG Root X1 and X2 but not Root YE; validation therefore relies on the server continuing to send the YE->X2->X1 cross-signed chain (4 certificates, ~5 KB handshake, fits the 16 KB record). Because cert dates are not checked (MBEDTLS_HAVE_TIME_DATE off) an expired or not-yet-valid cert is also accepted -- acceptable, but worth stating in the README.",
+    "reasoning": "I re-ran `openssl s_client -connect lichess.org:443 -servername lichess.org -showcerts` on 2026-09-21: chain 0 CN=mta-sts.lichess.org (EC prime256v1, NotBefore Aug 2 2026, NotAfter Oct 31 2026) <- Let's Encrypt YE1 (secp384r1) <- ISRG 'Root YE' (issued by ISRG Root X2) <- ISRG Root X2 (issued by ISRG Root X1, sha256WithRSAEncryption); SAN contains DNS:lichess.org; with -tls1_2: 'New, TLSv1.2, Cipher is ECDHE-ECDSA-AES256-GCM-SHA384', 'Peer signature type: ecdsa_secp256r1_sha256', 'Verification: OK'. Local sdkconfig: CERTIFICATE_BUNDLE=y, DEFAULT_FULL=y, MAX_CERTS=200, ECDSA_C=y, SECP256R1/SECP384R1=y, GCM_C=y, KEY_EXCHANGE_ECDHE_ECDSA=y, SHA512_C=y (esp_config.h derives MBEDTLS_SHA384_C from it), RSA_C defined, `# CONFIG_MBEDTLS_HAVE_TIME_DATE is not set` (HAVE_TIME=y only) so validity dates are not enforced. `nm lib/libmbedtls.a`: `R _binary_x509_crt_bundle_start`, `_binary_x509_crt_bundle_end` at 0x10d77 (68,983-byte bundle), `T esp_crt_bundle_attach`; `strings` finds 'ISRG Root X1' and 'ISRG Root X2' once each, 'Root YE' zero times. NetworkClientSecure.h line 76 signature as quoted. Inference (not hardware-tested, same caveat as the researcher): the default esp_crt_bundle callback looks up the ISSUER of the top-most presented cert; the top cert is the X2 cross-cert issued by ISRG Root X1, which is in the bundle, and its RSA-4096/SHA-256 signature is verifiable (RSA_C on), so the 4-cert chain should validate; there is no CROSS_SIGNED_VERIFY option in this sdkconfig and none is needed for this chain shape.",
+    "sources": [
+     "openssl s_client -connect lichess.org:443 -servername lichess.org -showcerts (run by me 2026-09-21, OpenSSL 3.6.4)",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/lib/libmbedtls.a",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/mbedtls/port/include/mbedtls/esp_config.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/NetworkClientSecure/src/NetworkClientSecure.h"
+    ]
+   }
+  },
+  {
+   "id": "L09",
+   "claim": "Reading ndjson: Arduino HTTPClient is unsuitable for endless streams as-is. getStream()/getStreamPtr() return the raw TCP stream with chunk framing still in it, and writeToStream() (the only place chunked decoding exists) blocks until the body ends. Lichess uses Transfer-Encoding: chunked for HTTP/1.1, but an HTTP/1.0 request gets an un-chunked, real-time stream terminated by connection close. esp_http_client (available in the Arduino libs) de-chunks transparently and returns -ESP_ERR_HTTP_EAGAIN on read timeout.",
+   "evidence": "Local HTTPClient.cpp lines 836-857 (getStream returns *_client) and 885-930 (chunk-size parsing only inside writeToStream, loop ends only at chunk len 0). Live test 2026-09-21: 'curl --http1.1 https://lichess.org/api/tv/feed' -> 'Content-Type: application/x-ndjson', 'Transfer-Encoding: chunked'; 'curl --http1.0' -> 'HTTP/1.1 200 OK', 'Connection: close', no Transfer-Encoding header, JSON lines arrived within the 6 s window. Local include/esp_http_client/include/esp_http_client.h: crt_bundle_attach (line 211), keep_alive_enable, esp_http_client_is_chunked_response, esp_http_client_read with '(-ESP_ERR_HTTP_EAGAIN = -0x7007) is returned when call is timed-out before any data was ready'. How others cope: joojoooo/OpenChess skips lines that look like hex chunk sizes ('if (isChunkSize && line.length() <= 8) continue;'), OPENCHESSBOARD does strchr(response,'{') on a fixed 2024-byte buffer with an 800 ms wait -- both break when a JSON line is split across chunks or exceeds the buffer.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/HTTPClient/src/HTTPClient.cpp",
+    "curl against https://lichess.org/api/tv/feed (run 2026-09-21)",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/esp_http_client/include/esp_http_client.h",
+    "https://raw.githubusercontent.com/joojoooo/OpenChess/main/src/lichess_api.cpp",
+    "https://raw.githubusercontent.com/TimoKropp/OPENCHESSBOARD_WiFi/main_nano_esp32/src/lichess_client.cpp"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Write one small 'NdjsonStream' class: own FreeRTOS task on core 0, esp_http_client_open + fetch_headers + read loop with timeout_ms ~1000, accumulate bytes into a PSRAM line buffer (>= 8 KB; a 300-ply gameState is ~2 KB), split on '\\n', ignore empty lines (but timestamp them for the watchdog), parse with ArduinoJson v7 using a filter, push compact events to the UI task via a queue. Fallback if esp_http_client misbehaves: raw NetworkClientSecure with a literal 'GET <path> HTTP/1.0' request. Short POSTs go through a second, persistent keep-alive connection to avoid a multi-second ECDSA handshake per move (handshake cost on S3 is my estimate, measure it).",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Arduino HTTPClient cannot de-chunk an endless stream (chunk decoding lives only in the blocking writeToStream()), and Lichess streams are chunked under HTTP/1.1 -- but HTTPClient::useHTTP10(true) is built in, and Lichess answers HTTP/1.0 with an un-chunked, real-time, close-delimited ndjson body, so HTTPClient + useHTTP10(true) + getStreamPtr() IS usable for the streams (on core >= 3.3.9 because of L07). esp_http_client is the alternative: transparent de-chunking, -ESP_ERR_HTTP_EAGAIN on idle, native crt_bundle_attach; note its read() only returns a partial buffer after timeout_ms of silence, so keep timeout_ms small (200-500 ms) for line latency.",
+    "reasoning": "Factual sub-claims all verified; the headline is overstated. Local HTTPClient.cpp: getStream()/getStreamPtr() (lines 836-857) return `*_client`/`_client` untouched; chunk parsing (`readStringUntil('\\n')`, strtol base 16, loop until len 0) exists only in writeToStream() lines 885-930, which getString() also uses -> blocks until the body ends. My own curl run 2026-09-21 on https://lichess.org/api/tv/feed: --http1.1 => 'Content-Type: application/x-ndjson', 'Transfer-Encoding: chunked'; --http1.0 => 'HTTP/1.1 200 OK', 'Connection: close', no Transfer-Encoding, and 6 JSON lines arrived live inside 6 s. esp_http_client.h: crt_bundle_attach (line 211), keep_alive_enable (213), esp_http_client_is_chunked_response (650), '-ESP_ERR_HTTP_EAGAIN = -0x7007 ... timed-out before any data was ready' (663); libesp_http_client.a is present. joojoooo/OpenChess lichess_api.cpp: setInsecure() + 'isChunkSize && line.length() <= 8' hack; OPENCHESSBOARD: `static char char_response[2024]`, 800 ms wait, strchr(response,'{'). WHAT THE RESEARCHER MISSED: the same local HTTPClient.cpp has `void HTTPClient::useHTTP10(bool)` (lines 487-489: `_useHTTP10 = useHTTP10; _reuse = !useHTTP10;`) and the request builder emits ' HTTP/1.0' + 'Connection: close' (lines 1137-1150). Combined with the verified Lichess HTTP/1.0 behaviour, `http.useHTTP10(true); http.GET(); Stream* s = http.getStreamPtr();` yields a clean un-chunked ndjson stream with stock HTTPClient -- no hand-written request needed. Second caveat, from ESP-IDF v5.5.4 esp_http_client.c: esp_http_client_read() loops `while (need_read > 0 && is_data_remain)` calling esp_transport_read(..., timeout_ms) and only returns a partial buffer after a read times out, so with a large `len` each ndjson line is delivered ~timeout_ms late; use timeout_ms 200-500 ms (or accept +1 s).",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/HTTPClient/src/HTTPClient.cpp",
+     "curl -N --http1.1 / --http1.0 https://lichess.org/api/tv/feed (run by me 2026-09-21)",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/esp_http_client/include/esp_http_client.h",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5.4/components/esp_http_client/esp_http_client.c",
+     "https://raw.githubusercontent.com/joojoooo/OpenChess/main/src/lichess_api.cpp",
+     "https://raw.githubusercontent.com/TimoKropp/OPENCHESSBOARD_WiFi/main_nano_esp32/src/lichess_client.cpp"
+    ]
+   }
+  },
+  {
+   "id": "L10",
+   "claim": "WiFi power: the Arduino core defaults the ESP32-S3 station to WIFI_PS_MIN_MODEM, which adds at most about one DTIM interval (~100-300 ms) of downlink latency -- irrelevant next to e-ink refresh times. Automatic light sleep / DFS is NOT available in the prebuilt Arduino libs (CONFIG_PM_ENABLE not set), so Espressif's 2.45 mA (auto light-sleep, DTIM1) and 20.7 mA (modem-sleep with DFS) figures are not reachable without rebuilding. Holding a TLS stream open costs almost nothing beyond staying associated (one tiny record per 7 s). Rough expectation for online play on 4000 mAh: tens of mA average => roughly 60-120 h; this is an estimate, not a measurement.",
+   "evidence": "Local WiFiGeneric.cpp lines 378-382: '#if CONFIG_IDF_TARGET_ESP32S2 ... WIFI_PS_NONE #else wifi_ps_type_t WiFiGenericClass::_sleepEnabled = WIFI_PS_MIN_MODEM;'. Local sdkconfig: '# CONFIG_PM_ENABLE is not set', CONFIG_FREERTOS_HZ=1000. ESP32-S3 datasheet v2.2 Table 5-9 modem-sleep, WAITI (both cores idle): 80 MHz 22.0 mA (periph clocks off) / 36.1 mA (on); 160 MHz 27.6/42.3; 240 MHz 32.9/47.6; Table 5-7: RX 88 mA, TX peak 283-340 mA; Table 5-10: light-sleep 240 uA (+140 uA for 8 MB octal PSRAM), deep-sleep 7-8 uA. ESP-IDF low-power Wi-Fi guide (ESP32-S3): modem-sleep+DFS 20.7/19.9/19.5 mA at DTIM 1/3/10; auto light-sleep 2.45/1.33/0.93 mA. Board-level overhead (LDO, charger IC, PSRAM, e-paper boost during refresh) not included.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiGeneric.cpp",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig",
+    "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf",
+    "https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/api-guides/low-power-mode/low-power-mode-wifi.html"
+   ],
+   "confidence": "medium",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Keep WIFI_PS_MIN_MODEM, call setCpuFrequencyMhz(80) while waiting for the opponent (WiFi needs >= 80 MHz) and 240 only while the local engine thinks. Turn WiFi fully off in offline modes. For correspondence games use deep sleep + timer wake + one GET /api/account/playing poll (weeks of battery). Measure real current with a USB power meter/PPK before promising battery life on MakerWorld."
+  },
+  {
+   "id": "L11",
+   "claim": "Puzzles: GET /api/puzzle/daily and GET /api/puzzle/{id} need no auth; GET /api/puzzle/next (angle, difficulty easiest..hardest, color) and GET /api/puzzle/batch/{angle}?nb=1..50 need puzzle:read; POST /api/puzzle/batch/{angle} with solutions [{id, win, rated}] needs puzzle:write and can return a fresh batch (nb). The response already contains puzzle.fen (position to solve, side to move = solver) and puzzle.lastMove, plus solution as a UCI array -- no PGN replay needed. The API explicitly forbids using next/batch to mass-download; for offline packs use the CC0 database (6,100,952 puzzles), whose CSV has different semantics (FEN is BEFORE the opponent's move; first move in Moves must be applied first).",
+   "evidence": "Live GET https://lichess.org/api/puzzle/daily today: 932 bytes, puzzle keys ['fen','id','initialPly','lastMove','plays','rating','solution','themes'], e.g. fen '8/P7/7r/1R1pk3/1P6/R1P5/6K1/7r b - - 1 1', lastMove 'g1g2', solution ['e5f4','c3c4','h6h2']. Spec api-puzzle-next.yaml / batch: 'DO NOT use this endpoint to enumerate puzzles for mass download.'; batch nb 1-50 default 15, 'mix' recommended angle. database.lichess.org: 'FEN is the position before the opponent makes their move. The position to present to the player is after applying the first move to that FEN. The second move is the beginning of the solution.'; fields PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes,GameUrl,OpeningTags,DailyDate; CC0.",
+   "sources": [
+    "https://lichess.org/api/puzzle/daily",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/puzzles/api-puzzle-next.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/puzzles/api-puzzle-batch-angle.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/schemas/PuzzleAndGame.yaml",
+    "https://database.lichess.org/"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Online puzzle mode: GET batch/mix?nb=10-20 when WiFi is up, cache in LittleFS, solve offline, POST results in one batch next time online (needs puzzle:write). Offline pack: a PC-side script filters the CC0 CSV (rating band, popularity, themes) into a compact binary (~60-80 bytes/puzzle => ~40k puzzles in the 3.4 MB data partition of default_16MB.csv) and pre-applies the first move so the on-device format matches the API semantics."
+  },
+  {
+   "id": "L12",
+   "claim": "'Replay my last games': GET /api/games/user/{username}?max=N with Accept: application/x-ndjson (or application/x-chess-pgn); options moves, tags, clocks, opening, lastFen, pgnInJson, sort; throttled to 20 games/s anonymous, 30 with OAuth, 60 for your own games. Moves come as SAN, so the device needs a SAN-to-move resolver on top of the legal move generator. GET /api/account/playing gives ongoing games for resume.",
+   "evidence": "api-games-user-username.yaml: parameter table (max, since, until, vs, rated, perfType, color, moves default true, pgnInJson, tags, clocks, opening, lastFen ndjson only, sort dateDesc) and throttling '20 games per second' / '30' / '60'. OPENCHESSBOARD_WiFi and Lichess-Link both use GET /api/account/playing to find the current game id.",
+   "sources": [
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/games/api-games-user-username.yaml",
+    "https://raw.githubusercontent.com/TimoKropp/OPENCHESSBOARD_WiFi/main_nano_esp32/src/lichess_client.cpp"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Plan a SAN parser in phase 2 (generate legal moves, match piece letter, target square, disambiguation, promotion, O-O/O-O-O) -- it is ~100 lines once full-rules move generation exists and it also unlocks PGN import from SD/LittleFS. Request moves=true&tags=false&max=10 to keep each ndjson line small."
+  },
+  {
+   "id": "L13",
+   "claim": "OAuth2 PKCE 'Login with Lichess' straight to the device on the LAN is allowed by the server: lila accepts any http/https redirect_uri and merely flags non-localhost http as 'insecure', showing a warning on the consent screen. Clients are unregistered/public (any client_id), only S256, tokens last about a year, no refresh tokens. This removes the need to paste a token at all.",
+   "evidence": "lila modules/oauth/src/main/Protocol.scala: RedirectUri.from only enforces scheme in List(\"http\",\"https\",\"ionic\",\"capacitor\",...) ; 'def insecure = value.scheme == \"http\" && !host.exists(h => List(\"localhost\", \"[::1]\", \"[::]\", \"127.0.0.1\", \"0.0.0.0\").has(h))'. AuthorizeUi.scala: 'prompt.redirectUri.insecure.option(flashMessage(\"warning\")(\"Does not use a secure connection\"))' -- warning only. Error text 'client_id required (choose any)'. Spec: 'Lichess supports unregistered and public clients (no client authentication, choose any unique client id). The only accepted code challenge method is S256. Access tokens are long-lived (expect one year), unless they are revoked. Refresh tokens are not supported.' Token exchange: POST /api/token with grant_type=authorization_code, code, code_verifier, redirect_uri, client_id -> {token_type, access_token, expires_in}; DELETE /api/token revokes the bearer token.",
+   "sources": [
+    "https://raw.githubusercontent.com/lichess-org/lila/master/modules/oauth/src/main/Protocol.scala",
+    "https://raw.githubusercontent.com/lichess-org/lila/master/modules/oauth/src/main/ui/AuthorizeUi.scala",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/lichess-api.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/oauth/api-token.yaml"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Offer both: (A) 'Login with Lichess': e-ink shows QR for http://<device-ip>/ ; page redirects to https://lichess.org/oauth?response_type=code&client_id=eink-chess&redirect_uri=http://<device-ip>/cb&code_challenge_method=S256&code_challenge=...&scope=board:play&state=... ; device verifies state, exchanges the code over TLS with its locally kept code_verifier (esp_random + mbedtls_sha256 + base64url). The code crosses the LAN in clear but is useless without the verifier. (B) fallback: paste a personal token into the same LAN page (with the pre-filled creation link from L02). Handle 401 everywhere => 'token expired/revoked, link again'. 'Unlink' must call DELETE /api/token then erase NVS.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As claimed; server-side acceptance of an http://<LAN-IP>/cb redirect_uri is verified both in source and by a live probe. redirect_uri at token exchange must equal the one used at /oauth (compared after stripping a trailing '/'), so the device must build both from the same IP string. Browser-side behaviour of the https->http LAN redirect is untested; keep the personal-token paste path as fallback.",
+    "reasoning": "lila modules/oauth/.../Protocol.scala lines 54-100 read verbatim: RedirectUri.from only `.ensure(Error.RedirectSchemeNotAllowed)` that scheme is in List(\"http\",\"https\",\"ionic\",\"capacitor\", legacy app schemes) or contains '.'; `def insecure = value.scheme == \"http\" && !host.exists(h => List(\"localhost\",\"[::1]\",\"[::]\",\"127.0.0.1\",\"0.0.0.0\").has(h))`. AuthorizeUi.scala line 39: `prompt.redirectUri.insecure.option(flashMessage(\"warning\")(\"Does not use a secure connection\"))` -- warning only; AuthorizationRequest.scala has no host allow-list (the `trusted` list only suppresses the 'Not owned or operated by lichess.org' note), and OAuthScope.dangerList = Team.Lead, Web.Mod, Web.Mobile, Web.Takex3, Msg.Write -- board:play is not 'danger', so no red confirm button. Error strings 'client_id required (choose any)' and \"supports only code_challenge_method 'S256'\" present. Spec lines 76-79 verbatim (unregistered/public clients, S256 only, ~1 year, no refresh). api-token.yaml: POST grant_type/code/code_verifier/redirect_uri/client_id -> token_type/access_token/expires_in; DELETE -> 204. LIVE PROBE (unauthenticated, no data sent): GET https://lichess.org/oauth?...redirect_uri=http://192.168.1.50/cb... => HTTP 303 to /login?referrer=... (request accepted), whereas the same URL with redirect_uri=ftp://... => HTTP 400. Not verified: how mobile browsers treat the final https->http private-IP top-level redirect (HTTPS-first modes may show an interstitial), and the consent page renders the Authorize button initially `disabled` for unsigned clients (JS enables it) -- so keep the paste-token fallback.",
+    "sources": [
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/oauth/src/main/Protocol.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/oauth/src/main/ui/AuthorizeUi.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/oauth/src/main/AuthorizationRequest.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/oauth/src/main/OAuthScope.scala",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/app/controllers/OAuth.scala",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/lichess-api.yaml",
+     "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/tags/oauth/api-token.yaml",
+     "live probe of https://lichess.org/oauth with redirect_uri=http://192.168.1.50/cb (303) vs ftp:// (400), 2026-09-21"
+    ]
+   }
+  },
+  {
+   "id": "L14",
+   "claim": "Provisioning stack on core 3.3.x: the core already bundles everything for a dependency-free captive portal (DNSServer with a CaptivePortal example, WebServer, ESPmDNS, Preferences, Update/HTTPUpdateServer, and WiFi.AP.enableDhcpCaptivePortal() for DHCP option 114). ESP32Async/ESPAsyncWebServer is actively maintained (v3.12.1 released 2026-09-12, states Arduino Core 2.x and 3.x, LGPL-3.0, needs AsyncTCP >= 3.5.0). tzapu/WiFiManager's last tagged release is v2.0.17 (2024-03-02) with sporadic master commits up to Feb 2026 and an open ESP32-S3 SoftAP issue (#1794); MIT; supports custom parameters of arbitrary length. Improv (Serial/BLE, MIT) only transports SSID/password but pairs well with a browser flasher. WiFiProv (bundled) requires Espressif's phone app. Key UX constraint: while the phone is joined to the ESP SoftAP it has no internet, so the user cannot reach lichess.org to create/copy a token or do OAuth inside the captive portal.",
+   "evidence": "Local libraries dir lists DNSServer (examples/CaptivePortal), WebServer, ESPmDNS, Preferences, Update, HTTPUpdateServer, WiFiProv; WiFi/src/AP.cpp line 309 'bool APClass::enableDhcpCaptivePortal()' setting ESP_NETIF_CAPTIVEPORTAL_URI. GitHub releases pages: ESPAsyncWebServer v3.12.1 (Sep 12), v3.12.0 (Jul 26, 'requiring AsyncTCP version 3.5.0'), v3.11.2 (Jun 28); README 'Arduino Core 2.x and 3.x', 'LGPL 3.0'. WiFiManager releases: v2.0.17 'March 2, 2024'; commits page: latest 'Feb 25, 2026'. Improv-WiFi-Library README: Serial default, BLE optional via NimBLE, v2.1.5, MIT.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/AP.cpp",
+    "https://github.com/ESP32Async/ESPAsyncWebServer/releases",
+    "https://github.com/tzapu/WiFiManager/releases",
+    "https://github.com/tzapu/WiFiManager/commits/master",
+    "https://github.com/jnthas/Improv-WiFi-Library"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Split provisioning in two stages instead of one captive portal that also takes the token: Stage 1 (SoftAP + captive portal, built-in DNSServer+WebServer, or ESPAsyncWebServer if you want the same server for the later LAN UI): SSID + password only; show the AP name/password and a WIFI: QR code on the e-ink. Stage 2 (device on home LAN): e-ink shows QR to http://<ip>/ (and http://eink-chess.local); there do Lichess linking (OAuth or paste), preferences, OTA upload. Optionally add Improv-Serial so a web flasher can set WiFi right after flashing. Avoid making WiFiManager a hard dependency (stale releases, blocking WebServer it owns).",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Core 3.3.x bundles a complete dependency-free provisioning stack (DNSServer + CaptivePortal example, WebServer, ESPmDNS, Preferences, Update/HTTPUpdateServer, WiFi.AP.enableDhcpCaptivePortal() for DHCP option 114). ESP32Async/ESPAsyncWebServer is actively maintained (v3.12.1, 2026-09-12; Arduino Core 2.x and 3.x; LGPL-3.0; AsyncTCP ^3.5.0). tzapu/WiFiManager: last tagged release v2.0.17 (2024-03-02), sporadic master commits to 2026-02-25, MIT; issue #1794 about ESP32-S3 is CLOSED (completed, 2025-01-25), so there is no known open S3 blocker -- the argument against it is only release staleness and its blocking, self-owned WebServer. jnthas/Improv-WiFi-Library is version 0.0.4 (MIT, Serial + optional BLE), a small low-activity library, not 'v2.1.5'. WiFiProv needs Espressif's phone app. The two-stage split (SoftAP portal for SSID/password only, then LAN page for Lichess linking) remains the right design because OAuth/token creation needs internet on the phone.",
+    "reasoning": "Main thrust verified, two details wrong. Local libraries dir lists DNSServer (examples/CaptivePortal), WebServer, ESPmDNS, Preferences, Update, HTTPUpdateServer, WiFiProv, ArduinoOTA; WiFi/src/AP.cpp line 309 `bool APClass::enableDhcpCaptivePortal()` and line 332 sets ESP_NETIF_CAPTIVEPORTAL_URI. GitHub API: ESPAsyncWebServer v3.12.1 published 2026-09-12, v3.12.0 2026-07-26 (notes: 'AsyncTCP version 3.5.0'; library.json dep `AsyncTCP ^3.5.0`), v3.11.2 2026-06-28, v3.11.1 2026-06-08; README line 40 'Arduino Core 2.x and 3.x', license LGPL-3.0. WiFiManager: v2.0.17 published 2024-03-02, last commit 2026-02-25, MIT. WRONG #1: issue tzapu/WiFiManager#1794 ('WiFiManager not working on ESP32-S3 (ESP32-S3-DevKitC-1 board)') is CLOSED, state_reason 'completed', closed 2025-01-25 two days after opening -- it is not an open S3 SoftAP bug and should not be cited as a reason to avoid WiFiManager (staleness of tagged releases still stands). WRONG #2: jnthas/Improv-WiFi-Library is not 'v2.1.5' -- that string is the example firmware-version argument in README (`setDeviceInfo(..., \"2.1.5\", \"My Device\")`); library.json says version 0.0.4, the only GitHub release is v0.0.1 (2023-03-30), last push 2025-12-30, MIT, Serial default with optional BLE via -DIMPROV_WIFI_BLE_ENABLED. The 'phone on SoftAP has no internet' constraint is an inference (reasonable: captive-portal mini-browsers are bound to the WiFi interface). License note: ESPAsyncWebServer LGPL-3.0 and GxEPD2 GPL-3.0 force the firmware to GPLv3 (not v2-only).",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/AP.cpp",
+     "https://api.github.com/repos/ESP32Async/ESPAsyncWebServer/releases",
+     "https://raw.githubusercontent.com/ESP32Async/ESPAsyncWebServer/main/README.md",
+     "https://raw.githubusercontent.com/ESP32Async/ESPAsyncWebServer/main/library.json",
+     "https://api.github.com/repos/tzapu/WiFiManager/releases",
+     "https://api.github.com/repos/tzapu/WiFiManager/commits?per_page=1",
+     "https://api.github.com/repos/tzapu/WiFiManager/issues/1794",
+     "https://raw.githubusercontent.com/jnthas/Improv-WiFi-Library/main/library.json",
+     "https://raw.githubusercontent.com/jnthas/Improv-WiFi-Library/main/README.md"
+    ]
+   }
+  },
+  {
+   "id": "L15",
+   "claim": "Token at rest: in the prebuilt Arduino libs NVS is unencrypted and flash encryption is off, so a token stored with Preferences is readable by anyone who dumps the flash (same as the WiFi password the core already stores). NVS encryption via the HMAC scheme works without flash encryption on ESP32-S3 and the needed functions are present in the prebuilt libs, but it requires burning an eFuse key (irreversible) per device. The NVS partition in default_16MB.csv is 20 KB, ample for a 512-char token.",
+   "evidence": "Local sdkconfig: '# CONFIG_NVS_ENCRYPTION is not set', '# CONFIG_SECURE_FLASH_ENC_ENABLED is not set', CONFIG_SOC_HMAC_SUPPORTED=y. Symbols found in prebuilt libs: nvs_sec_provider_register_hmac (libnvs_sec_provider.a), nvs_flash_secure_init_partition and nvs_flash_generate_keys_v2 (libnvs_flash.a). ESP-IDF NVS encryption doc: HMAC scheme keys are 'derived from an HMAC key programmed in eFuse' and 'not stored anywhere in the flash'; it 'enables us to achieve secure storage on ESP32-S3 without enabling flash encryption'. default_16MB.csv: 'nvs, data, nvs, 0x9000, 0x5000'.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/lib/libnvs_sec_provider.a",
+    "https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/api-reference/storage/nvs_encryption.html",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/tools/partitions/default_16MB.csv"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Default: plain NVS (Preferences namespace 'lichess'), minimal scope (board:play), never print the token to Serial/web logs, never echo it back in HTML (show only 'linked as <username>'), password-protect the SoftAP with a per-device password shown on the e-ink, and provide 'Unlink' that revokes server-side. Document the threat model in the README. Keep eFuse/HMAC NVS encryption as an optional, clearly-irreversible advanced build flag, not the MakerWorld default."
+  },
+  {
+   "id": "L16",
+   "claim": "Existing open-source MCU clients for the Lichess Board API (none uses an e-ink touch UI; none validates TLS certificates): TimoKropp/OPENCHESSBOARD_WiFi (MIT; Arduino Nano ESP32 = ESP32-S3; PlatformIO; two WiFiClientSecure with setInsecure(); hand-written HTTP/1.1; endpoints account/playing, board/game/stream, move, board/seek, challenge/ai; AP settings page at openchessboard.local; has puzzle_app and BLE mode); omercier01/Chessboard (MIT; ESP32 or Pico W; two HTTPClient objects, getStreamPtr + ArduinoJson ReadBufferingStream; touch LCD UI, qrcode.c, PersistentParam); joojoooo/OpenChess (upstream Concept-Bytes MIT, joojoooo's modifications PolyForm Noncommercial 1.0.0 => not GPL-compatible; new WiFiClientSecure + setInsecure per request, chunk-line skipping, no 429 handling, OTA from GitHub releases, web UI); Kzra/Lichess-Link (MIT; Uno WiFi Rev2, polling every 5 s); lichess-org/api-demo (official reference implementation of the full flow incl. OAuth PKCE, TypeScript).",
+   "evidence": "wifi_app.cpp: 'WiFiClientSecure StreamClient; WiFiClientSecure PostClient;' 'PostClient.setInsecure(); StreamClient.setInsecure();'. lichess_client.cpp: 'client.println(\" HTTP/1.1\")', 'static char char_response[2024]', 'strchr(response, '{')', 800 ms wait. omercier01 NetworkLoop.ino: httpClientStream/httpClientApi, 'wifiClientStream = httpClientStream->getStreamPtr()', setInsecure only for RP2040. OpenChess lichess_api.cpp: 'client.setInsecure();' comment 'For simplicity; in production, use proper cert validation'. Licenses as shown on each GitHub repo page; Board tag in the API spec links api-demo as 'Implementation example'.",
+   "sources": [
+    "https://github.com/TimoKropp/OPENCHESSBOARD_WiFi",
+    "https://raw.githubusercontent.com/TimoKropp/OPENCHESSBOARD_WiFi/main_nano_esp32/src/wifi_app.cpp",
+    "https://github.com/omercier01/Chessboard",
+    "https://raw.githubusercontent.com/omercier01/Chessboard/main/Chessboard/NetworkLoop.ino",
+    "https://github.com/joojoooo/OpenChess",
+    "https://github.com/Kzra/Lichess-Link",
+    "https://github.com/lichess-org/api-demo"
+   ],
+   "confidence": "medium",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Read OPENCHESSBOARD_WiFi (closest hardware: S3 + Arduino + PlatformIO) for the end-to-end flow and its settings-AP pages, and lichess-org/api-demo for canonical event handling and PKCE. MIT code may be reused in a GPL-3.0 firmware with attribution; do NOT copy from joojoooo/OpenChess. Do better than all of them on: cert validation, chunk-safe ndjson parsing, 429 handling, reconnect watchdog. After release, open a PR on lichess-org/api to be listed under the Board tag links."
+  },
+  {
+   "id": "L17",
+   "claim": "Move encoding caveats: moves are UCI (e2e4, e7e8q). The schema describes castling as 'King to rook for Chess960-compatible castling notation', so the firmware should accept both e1g1 and e1h1 style castling when parsing the 'moves' string, and replay from initialFen ('startpos' or a FEN for from-position/AI games).",
+   "evidence": "GameStateEvent.yaml moves description: 'Current moves in UCI format (King to rook for Chess960-compatible castling notation)'; GameFullEvent.yaml: initialFen default 'startpos'. Which form is emitted for standard games was not observed live (no authenticated test possible).",
+   "sources": [
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/schemas/GameStateEvent.yaml",
+    "https://raw.githubusercontent.com/lichess-org/api/master/doc/specs/schemas/GameFullEvent.yaml"
+   ],
+   "confidence": "medium",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "In the UCI parser treat 'king moves two files' and 'king moves onto own rook' as the same castling move; restrict online play to variant=standard (and optionally fromPosition) in v1; reject gameStart events with other variants gracefully."
+  },
+  {
+   "id": "L18",
+   "claim": "Build reproducibility affects the TLS code: platformio.ini uses 'platform = espressif32', which resolves to pioarduino 55.03.38 (core 3.3.8) only because that is what is installed under that name on Fabrizio's machine; a MakerWorld user with stock PlatformIO would get the official platform (Arduino core 2.0.x), where NetworkClientSecure does not exist and setCACertBundle has a different signature. The env also uses board seeed_xiao_esp32s3 although a seeed_xiao_esp32_s3_plus board definition exists (its JSON defaults to default_8MB.csv despite 16 MB flash; the project already overrides to default_16MB.csv, which gives two 6.25 MB OTA slots + 3.4 MB data).",
+   "evidence": "Firmware platformio.ini: 'platform = espressif32', 'board = seeed_xiao_esp32s3', 'board_build.partitions = default_16MB.csv'. ~/.platformio/platforms/espressif32/platform.json: version 55.03.38, arduino-esp32 3.3.8 URL. Boards dir contains both seeed_xiao_esp32s3.json and seeed_xiao_esp32_s3_plus.json ('partitions': 'default_8MB.csv', 'flash_size': '16MB', memory_type qio_opi). arduinoWebSockets issue #896 documents the setCACertBundle signature change in core 3.0.4. The claim about what the stock registry resolves to is from my prior knowledge, not re-verified today.",
+   "sources": [
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/platformio.ini",
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/platform.json",
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32_s3_plus.json",
+    "https://github.com/Links2004/arduinoWebSockets/issues/896"
+   ],
+   "confidence": "medium",
+   "impact": "minor",
+   "contradicts_plan": true,
+   "recommended_action": "Pin the platform by URL (https://github.com/pioarduino/platform-espressif32/releases/download/55.03.38/platform-espressif32.zip), switch to board = seeed_xiao_esp32_s3_plus keeping the default_16MB.csv override, and publish prebuilt .bin files + a web flasher so most MakerWorld users never need a toolchain.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Confirmed: `platform = espressif32` resolves to pioarduino 55.03.38 / core 3.3.8 only on Fabrizio's machine; stock PlatformIO resolves to platformio/espressif32 7.1.3 -> Arduino core 2.0.17 (no NetworkClientSecure, one-argument setCACertBundle, and no seeed_xiao_esp32_s3_plus board). Pin the platform by URL -- but to pioarduino >= 55.03.39 (e.g. https://github.com/pioarduino/platform-espressif32/releases/download/55.03.312/platform-espressif32.zip, core 3.3.12), not 55.03.38, so the L07 fix is included. Use board = seeed_xiao_esp32_s3_plus with the default_16MB.csv override; this is more than cosmetic because elf2image and the merged .factory.bin take the header flash size from the board JSON (8MB on the non-plus board), which matters for the prebuilt-binary / web-flasher distribution path.",
+    "reasoning": "Firmware platformio.ini read: `platform = espressif32`, `board = seeed_xiao_esp32s3`, `board_build.arduino.memory_type = qio_opi`, `board_build.partitions = default_16MB.csv`. Installed ~/.platformio/platforms/espressif32/platform.json: repository pioarduino, version 55.03.38, core 3.3.8 URLs. The part the researcher had NOT re-verified I checked today: the PlatformIO registry's platformio/espressif32 latest is 7.1.3 (released 2026-09-11) and its platform.json pins `framework-arduinoespressif32 ~4.20017.0` = Arduino core 2.0.17; in arduino-esp32 tag 2.0.17 WiFiClientSecure.h line 75 is `void setCACertBundle(const uint8_t * bundle);` (one argument) and libraries/NetworkClientSecure does not exist (HTTP 404). Also the official platform's boards dir has only seeed_xiao_esp32c3/c6/s3 -- NO seeed_xiao_esp32_s3_plus, so switching the board id without pinning the platform gives stock users 'Unknown board ID'. Both local board JSONs read: plus = flash_size 16MB, maximum_size 16777216, partitions default_8MB.csv, variant XIAO_ESP32S3_Plus; non-plus = flash_size 8MB. Extra consequence found in the installed builder main.py: serial upload uses `--flash-size detect` (so the current ini works over USB), but elf2image (line ~906) and the merged `.factory.bin` (lines 1625-1636) use `board.get(\"upload.flash_size\")` = 8MB for the non-plus board; a factory image with an 8 MB header plus a 16 MB partition table written raw by a web flasher is expected to be rejected by the IDF bootloader ('exceeds flash chip size') -- inference, not tested. CORRECTION to the recommended action: do NOT pin 55.03.38 -- it carries the L07 NetworkClientSecure bug; pin >= 55.03.39 (core 3.3.9) e.g. 55.03.311 (core 3.3.11) or 55.03.312 (core 3.3.12, 2026-09-20); I verified the release zips return HTTP 200 and that 55.03.312 contains boards/seeed_xiao_esp32_s3_plus.json.",
+    "sources": [
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/platformio.ini",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/platform.json",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32_s3_plus.json",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32s3.json",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/builder/main.py",
+     "https://raw.githubusercontent.com/platformio/platform-espressif32/develop/platform.json",
+     "https://api.registry.platformio.org/v3/packages/platformio/platform/espressif32",
+     "https://api.github.com/repos/platformio/platform-espressif32/contents/boards?ref=develop",
+     "https://raw.githubusercontent.com/espressif/arduino-esp32/2.0.17/libraries/WiFiClientSecure/src/WiFiClientSecure.h",
+     "https://api.github.com/repos/pioarduino/platform-espressif32/releases",
+     "https://raw.githubusercontent.com/pioarduino/platform-espressif32/55.03.312/platform.json"
+    ]
+   }
+  }
+ ],
+ "unknowns": [
+  "Actual free INTERNAL heap on the real build (GxEPD2 48 KB frame buffer + WiFi + CT-800 + 2-3 TLS sessions): must be measured on hardware; my 42 KB/session figure is Espressif's doc number for the default config, not a measurement on Arduino 3.3.8.",
+  "Whether esp_crt_bundle on IDF 5.5.4 validates today's 4-certificate Let's Encrypt Gen-Y chain (YE1 -> ISRG Root YE -> ISRG Root X2 -> ISRG Root X1) end-to-end; the bundle has X1/X2 but not Root YE, so it relies on the server-sent cross-signs. Expected to work, untested.",
+  "HTTP/1.0 un-chunked real-time streaming was verified only on the public /api/tv/feed endpoint, not on authenticated /api/stream/event, /api/board/game/stream/{id} or the POST /api/board/seek stream (same nginx front, so likely identical).",
+  "How long Lichess's nginx keeps an idle keep-alive connection open (matters for reusing one TLS connection for move POSTs), and the real TLS handshake time on the S3 with this ECDSA P-256/P-384 chain (my 2-3 s figure is an estimate).",
+  "Numeric rate limits for creating seeks / AI challenges / challenges are not documented in the API spec; only the generic 'one request at a time, 429 => wait a minute' rule is.",
+  "Whether GET /api/board/game/stream/{id} on an already finished game returns a gameFull line with the UCI move list (docs imply it does before closing) -- would allow replay without a SAN parser for one's own games.",
+  "Which castling form (e1g1 vs e1h1) the Board stream emits for standard games today; schema text suggests king-to-rook is possible.",
+  "Real average current of the XIAO ESP32-S3 Plus + Seeed driver board with WiFi associated in MIN_MODEM sleep (board-level losses, PSRAM, charger IC unknown); battery-life numbers given are estimates from datasheet tables.",
+  "Whether tzapu/WiFiManager (release 2.0.17 or master) builds and runs cleanly on core 3.3.8 + ESP32-S3; not tested, only release/commit/issue metadata was read.",
+  "Whether the fix for arduino-esp32 issue #12368 (PR #12615) is included in any released core newer than 3.3.8 / a newer pioarduino platform; I only verified it is absent from the locally installed 3.3.8.",
+  "What the stock PlatformIO registry currently resolves 'platform = espressif32' to (not re-checked today)."
+ ],
+ "questions_for_user": [
+  "Lichess linking UX: are you OK with a 'Login with Lichess' flow (scan a QR on the e-ink with your phone, approve on lichess.org, which will show a yellow 'Does not use a secure connection' warning because the device is plain http on your LAN), with 'paste a personal token' as fallback? Or do you want paste-only to keep the firmware simpler?",
+  "Which online modes matter for v1, in order: (a) vs Lichess Stockfish level 1-8 (can be clock-less, ideal for e-ink), (b) random opponent seek at Rapid (10+0 / 15+10), (c) challenge/accept a friend by username, (d) correspondence games with deep sleep between moves? Rated games allowed or casual only?",
+  "Distribution model on MakerWorld: prebuilt .bin + browser flasher (then I can use rebuilt ESP-IDF libs via pioarduino custom_sdkconfig for PSRAM-backed TLS and real light-sleep if needed), or must every user be able to build from source with a stock PlatformIO install in one click?",
+  "Do you have (or will you create) a dedicated Lichess test account plus a second account/device to test seeks, friend challenges, draw offers, opponent-gone and reconnects without risking your main account?",
+  "Target battery life while playing online (e.g. 'one evening', '2 days', 'a week of correspondence')? This decides whether the simple Arduino modem-sleep setup (est. 60-120 h on 4000 mAh) is enough or whether we invest in light-sleep/custom sdkconfig.",
+  "Is your home WiFi 2.4 GHz with WPA2/WPA3-Personal (the ESP32-S3 has no 5 GHz and enterprise/captive-login networks are out of scope)? Will the board also be used on phone hotspots (affects reconnect/roaming handling)?",
+  "Offline puzzle pack: how much of the 3.4 MB data partition do you want to dedicate to preloaded Lichess CC0 puzzles (roughly 40k puzzles max), and which rating band/themes (e.g. 800-2000, mates + tactics)? Should online puzzle results be reported back to your Lichess puzzle rating (needs the extra puzzle:write scope)?",
+  "Languages for the on-device UI and the phone setup pages: Italian only, English only, or both from day one?"
+ ]
+}

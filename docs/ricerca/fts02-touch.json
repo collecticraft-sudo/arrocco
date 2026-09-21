@@ -1,0 +1,276 @@
+{
+ "summary": "The touch path is confirmed from Good Display primary documents: the GDEY075T7-T01 uses a GT911 touch controller, the FTS02 works powered from 3.3 V alone, and the 6-pin touch flat matches connector TP-FPC2 (P7).\n\nThe main findings, against the current recap, wiring.md and firmware:\n\n- **Panel facts.** Touch IC is GT911, supply 2.8–3.6 V, 6-pin 0.5 mm flat. Pin order is 1 GND, 2 VDD, 3 RST, 4 INT, 5 SDA, 6 SCL. Native resolution is 800x480 landscape, and X runs the same way as GxEPD2 rotation 0. There is no separate cover glass: the touch layer is a 0.48 mm sensor plus 0.15 mm anti-glare film (0.63 mm total).\n- **FTS02 electrical path.** P7 pin order matches the panel exactly. VDD connects straight to the header \"3.3V\" net with no LDO, switch or level shifter in between. There are 10k pull-ups on the two I2C lines. So 3.3 V plus GND is sufficient.\n- **wiring.md header labels are wrong (blocker).** The FTS02 has no pins labelled TP_SDA/TP_SCL/TP_INT/TP_RST. The touch signals are on header P10 as A0 = INT, A3 = RST, A4 = SDA, A5 = SCL. For the 7.5\" on P7, SDA/SCL are swapped relative to the schematic's TP_SCL/TP_SDA net names. The P8 pins silkscreened \"SDA\"/\"SCL\" carry SD_CS and FL_EN, not the touch bus.\n- **Insertion orientation.** Good Display's spec says the 7.5\" touch flat must be inserted into P7 \"in reverse orientation\". wiring.md does not mention this.\n- **FTS02 height.** The board is 58.6 x 54.7 mm, but its back carries vertical male pin headers and a 2x20 Raspberry Pi socket. I estimate about 13–14 mm tall, and over 20 mm with Dupont housings, which breaks the 15–16 mm thickness target. A generic 6-pin 0.5 mm FPC breakout (about 23 x 14 x 4 mm) with two 4.7k pull-ups is the right part for the MakerWorld build.\n- **Good Display's sample code.** It uses address 0x5D, never resets the GT911 and never writes a config block. Its own comment warns the embedded config is unsuitable. The config is therefore pre-flashed at the factory; the firmware must never write it.\n- **Pin choice for INT/RST.** INT on GPIO43 (UART0 TX, used for boot messages) and RST on GPIO44 are not RTC-capable GPIOs. Touch cannot wake the XIAO from deep sleep with this pin map, and there is boot-time contention on the INT line.\n- **Smaller firmware items.** 400 kHz is marginal with the 10k pull-ups. The 0x14 fallback is documented but not implemented. The rotation maths for cases 1 and 3 is wrong.",
+ "findings": [
+  {
+   "id": "T1",
+   "claim": "GDEY075T7-T01 touch = Goodix GT911, 2.8-3.6 V, 6-pin 0.5 mm FPC with pin order 1 GND, 2 VDD, 3 RST, 4 INT, 5 SDA, 6 SCL; native touch resolution 800x480 (landscape). The recap's IC/voltage assumptions are correct.",
+   "evidence": "TP075-Y01 drawing (Good Display, 2023-07-12): 'Touch IC:GT911', 'Touch Voltage:2.8-3.6V', table 'TP Pin define 1 GND / 2 VDD / 3 RST / 4 INT / 5 SDA / 6 SCL', 'P 0.5X5=2.5', tail width '3.50±0.1', '800*480 dots', front view labels the tail '6 ... 1' (pin 6 left, pin 1 right, tail pointing down). GDEY075T7-T01 spec rev 1.0 p.5 repeats the table as 'GND, VCC (3.3V), RESET (3.3V), INT (3.3V), SDA (3.3V), SCL (3.3V)'; p.7: 'Touch Panel Operating Voltage 2.8~3.6 V, Operating Current 4.32 mA, Standby Current 55 uA'. Product page: 'Capacitive touch panel-GT911, supports 5-point touch', 6-pin FPC.",
+   "sources": [
+    "https://v4.cecdn.yun300.cn/100001_1909185148/TP075-Y01.pdf",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/GDEY075T7-T01.pdf",
+    "https://www.good-display.com/product/483.html"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Put this pin table verbatim into docs/wiring.md so the MakerWorld build does not depend on the FTS02 silkscreen."
+  },
+  {
+   "id": "T2",
+   "claim": "wiring.md's FTS02 header labels are wrong. The header has no pins labelled TP_SDA/TP_SCL/TP_INT/TP_RST. Touch signals are on header P10 ('A') with silkscreen A0 = INT, A3 = RST, A4, A5; power is on P11 ('3.3V' x2, 'GND' x2, right next to a '5V' pin). For the 7.5\" panel on TP-FPC2 (P7): panel SDA = A4 and panel SCL = A5. That is the opposite of the schematic's net names (TP_SCL = A4, TP_SDA = A5), which apply only to P6 (small panels). The P8 pins silkscreened 'SDA'/'SCL' are nets SD_CS and FL_EN and are NOT connected to the touch FPC.",
+   "evidence": "ESP32-FTS02_SCH-20250819.pdf, block 'ESP32 Touch': P7 FPC6-TP2 '3.7/4.2/4.26/5.83/~7.5inch' pins 1 GND, 2 VDD->3.3V, 3 RST->A3, 4 INT->A0, 5 SDA->A4, 6 SCL->A5. P6 FPC6-TP1 pins 1 GND, 2 INT (TP_INT/A0), 3 RST (TP_RST/A3), 4 VDD, 5 SCL (TP_SCL/A4), 6 SDA (TP_SDA/A5). PDF netlist: 'PIP1031 PIP605 PIP705 PIP1003 PIR2402 NLA4 NLTP0SCL' and 'PIP1033 PIP606 PIP706 PIP1004 PIR2502 NLA5 NLTP0SDA', so P7 pin 5 is on net A4 and P7 pin 6 on net A5. P10 = A0,A3,A4,A5,A6,A7; P11 = 5V,3.3V,3.3V,GND,GND,RST,A19,A18. 'PIP105 PIP8010 PIR102 NLFL0EN NLSCL' and 'PIP103 PIP809 ... NLSD0CS NLSDA' show P8 'SCL' = FL_EN and P8 'SDA' = SD_CS. Good Display's 7.5\" sample i2c.h confirms: '#define SCL_H() digitalWrite(A5,HIGH)', '#define SDA_H() digitalWrite(A4,HIGH)', '#define CLR_RST() digitalWrite(A3,LOW)', '#define CLR_INT() digitalWrite(A0,LOW)'. Back-side photo shows silkscreen '5V 3.3V 3.3V GND GND RESET A19 A18' and 'A0 A3 A4 A5 A6 A7'.",
+   "sources": [
+    "https://v4.cecdn.yun300.cn/100001_1909185148/ESP32-FTS02_SCH-20250819.pdf",
+    "https://www.good-display.com/companyfile/1964.html",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/T075T7_GT911_Arduino.rar",
+    "https://ueeshop.ly200-cdn.com/u_file/UPBG/UPBG827/2509/photo/7eabc4d463.png",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/docs/wiring.md"
+   ],
+   "confidence": "high",
+   "impact": "blocker",
+   "contradicts_plan": true,
+   "recommended_action": "Rewrite the wiring table: P11 '3.3V' -> XIAO 3V3, P11 'GND' -> GND, P10 'A4' -> D4 (SDA, GPIO5), P10 'A5' -> D5 (SCL, GPIO6), P10 'A0' -> INT, P10 'A3' -> RST. Warn: never use the P11 '5V' pin and never use the P8 'SDA/SCL' pins. In firmware, make begin() probe both pin assignments (SDA=5/SCL=6, then swapped) and both addresses, so a swapped pair self-heals.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Claim stands as written. Precise wiring for the 7.5\" panel in P7 (TP-FPC2): P11 '3.3V' -> XIAO 3V3, P11 'GND' -> GND, P10 'A4' (pin 3) = panel SDA -> D4/GPIO5, P10 'A5' (pin 4) = panel SCL -> D5/GPIO6, P10 'A0' (pin 1) = INT, P10 'A3' (pin 2) = RST. P8 'SDA'/'SCL' are SD_CS/FL_EN and must not be used; P11 pin 1 is 5V, adjacent to the two 3.3V pins. The mapping assumes the tail is inserted the way Good Display intends (see T4); Good Display's own 7.5\" sample code (SDA=A4, SCL=A5, RST=A3, INT=A0, addr 0x5D) corroborates it. Additional: the FTS02 has 10k pull-ups only on A4/A5 (R24/R25 to 3.3V) and none on RST/INT.",
+    "reasoning": "Re-derived from the schematic PDF myself (pdftotext -bbox on ESP32-FTS02_SCH-20250819.pdf, Altium netlist tokens + visible text coordinates). Netlist section reads: 'PIP1035 PIP602 PIP704 PIP1001 NLA0 NLTP0INT', 'PIP1037 PIP603 PIP703 PIP1002 NLA3 NLTP0RST', 'PIP1031 PIP605 PIP705 PIP1003 PIR2402 NLA4 NLTP0SCL', 'PIP1033 PIP606 PIP706 PIP1004 PIR2502 NLA5 NLTP0SDA'. So P7-5 and P10-3 are on net A4, P7-6 and P10-4 on net A5. Visible pin names by coordinate: P6 column = GND, INT, RST, VDD, SCL, SDA (pins 1-6, nets GND/TP_INT/TP_RST/3.3V/TP_SCL/TP_SDA = A0/A3/A4/A5); P7 column = GND, VDD, RST, INT, SDA, SCL with net labels GND, 3.3V, A3, A0, A4, A5, captioned '3.7/4.2/4.26/5.83/~7.5inch'. Panel drawing TP075-Y01 'TP Pin define': 1 GND, 2 VDD, 3 RST, 4 INT, 5 SDA, 6 SCL -> identical to the P7 symbol, so panel SDA lands on A4 and SCL on A5, opposite to the TP_SCL=A4/TP_SDA=A5 net names (which fit P6 only). Good Display's own 7.5\" sample (T075T7_GT911_Arduino.rar, i2c.h, streamed and read in memory) has '#define SCL_H() digitalWrite(A5,HIGH)', '#define SDA_H()  digitalWrite(A4,HIGH)', '#define CLR_RST() digitalWrite(A3,LOW)', '#define CLR_INT() digitalWrite(A0,LOW)', and GT911.h uses write addr 0xBA (=0x5D). P8: 'PIP105 PIP8010 PIR102 NLFL0EN NLSCL' and 'PIP103 PIP809 PIR2201 PIU302 NLSD0CS NLSDA' -> P8 pin 10 silk SCL = FL_EN, P8 pin 9 silk SDA = SD_CS (U3 = microSD); neither net touches P6/P7. P10 text: A0,A3,A4,A5,A6,A7 (pins 1-6); P11: VIN/5V, 3.3V, 3.3V, GND, GND, RST, A19, A18; 5V net contains PIP1101 only on that header, 3.3V net contains PIP1102, PIP1103, PIP702 (P7 VDD), PIR2401, PIR2501 (R24/R25 = 10k each). Back-side photo shows mirrored silk '5V 3.3V 3.3V GND GND RESET A19 A18' and 'A0 A3 A4 A5 A6 A7', and P8 silk 'SDA/SCL'. wiring.md lines 13-18 indeed list '3V3 / VCC', 'TP_SDA (SDA)', 'TP_SCL (SCL)', 'TP_INT', 'TP_RST' - none of which exist on the board, and the '(SDA)/(SCL)' hint points the reader at the wrong P8 pins. I found nothing contradicting the claim. Extra facts seen: no pull-up on RST or INT anywhere on the FTS02 (nets A3/A0 contain only P1/P6/P7/P10 pins) although the GT911 datasheet pin table says '/RSTB ... External 10K pull-up resistor required'; the LED sits on the 5V rail, so at 3.3 V-only supply no LED lights (do not use it as a power indicator).",
+    "sources": [
+     "https://v4.cecdn.yun300.cn/100001_1909185148/ESP32-FTS02_SCH-20250819.pdf",
+     "https://v4.cecdn.yun300.cn/100001_1909185148/TP075-Y01.pdf",
+     "https://v4.cecdn.yun300.cn/100001_1909185148/T075T7_GT911_Arduino.rar",
+     "https://ueeshop.ly200-cdn.com/u_file/UPBG/UPBG827/2509/photo/7eabc4d463.png",
+     "https://www.good-display.com/product/483.html",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/docs/wiring.md"
+    ]
+   }
+  },
+  {
+   "id": "T3",
+   "claim": "Powering the FTS02 with 3.3 V on its '3.3V' header pin is sufficient for the touch path with nothing else populated. Panel VDD is wired directly to the header 3.3V net, with no LDO, load switch or level shifter between FPC and header. The only parts on the touch lines are two 10k I2C pull-ups (R24 on A4, R25 on A5) to 3.3V. There is no pull-up on RST or INT. The on-board RT9193-33 LDO and LT1615 boost hang off the 5V net and feed a separate '3V3' net used only by the front-light selector.",
+   "evidence": "Schematic netlist for net 3.3V ('NL303V') contains P7 pin 2 (PIP702), P6 pin 4 (PIP604), P11 pins 2 and 3 (PIP1102, PIP1103), P8 pin 8, P1 pins 1 and 17, and R24/R25 pin 1. U1 RT9193-33GB VOUT goes only to C4 and P2 pin 1 ('PIC401 PIP201 PIU105'). Spec table: 'Power Supply 3.3V (Front light 5V)'. Product page: 'POWER INPUT DC3.3V (Front Light DC 5V)', 'INTERFACE 24pin and 6pin FPC 0.5mm'. The GT911 datasheet pin table says /RSTB needs an 'External 10K pull-up resistor'; the FTS02 has none, so it is either on the panel FPC or absent.",
+   "sources": [
+    "https://v4.cecdn.yun300.cn/100001_1909185148/ESP32-FTS02_SCH-20250819.pdf",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/ESP32-FTS02.pdf",
+    "https://www.good-display.com/product/697.html",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/GT911%20Datasheet_English.pdf"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Keep the 3.3 V plan. Have the firmware drive RST push-pull HIGH permanently (it does). If deep sleep is added later, hold RST high with gpio_hold or add a 10k pull-up. Also check on arrival whether R16 (10k from 3.3V to BS) and R17 (0 ohm from BS to GND) are both populated. If they are, the FTS02 draws a constant 0.33 mA from 3.3 V even with no e-paper attached."
+  },
+  {
+   "id": "T4",
+   "claim": "The 6-pin touch flat mates with TP-FPC2/P7 (6 pin, 0.5 mm, identical pin order), but Good Display states the 7.5\" touch FPC must be inserted 'in reverse orientation'. wiring.md does not mention this. Geometrically, pin 1 (GND) of the tail lines up with P7 pin 1 (GND marking) only when the panel is face-down relative to the FTS02 component side, or equivalently when the tail is folded 180 degrees behind the panel.",
+   "evidence": "ESP32-FTS02 spec section 3.3: 'For touchscreens under 2.9 inches, use the P6 interface; for touchscreens above 3.7 inches, use the P7 interface. Note: 2.9-inch and 7.5-inch touchscreens must be inserted in reverse orientation into the corresponding interface.' The same spec, section 3.2, says the e-paper goes 'display face up'. The TP075-Y01 front view has pin 6 at left and pin 1 at right; the side view labels 'CONTACT' on one face and 'PI Stiffener' on the other. The FTS02 photo shows 'GND' silk at the pin 1 end of P7. The FTS02 is listed as the driver solution on the T01 product page.",
+   "sources": [
+    "https://v4.cecdn.yun300.cn/100001_1909185148/ESP32-FTS02.pdf",
+    "https://www.good-display.com/companyfile/1924.html",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/TP075-Y01.pdf",
+    "https://www.good-display.com/product/483.html"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Add to wiring.md: the touch flat goes into P7 flipped relative to the display flat. After insertion and before powering, check there is no short between header 3.3V and GND. Then run an I2C scan expecting 0x5D or 0x14. On arrival, note which face of the tail carries the gold contacts and which side of P7 has its contacts. This decides how the FTS02 or breakout must be oriented in the case.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Good Display's FTS02 spec (sec. 3.3) states verbatim that 7.5-inch touchscreens 'must be inserted in reverse orientation' into P7, while the e-paper goes 'display face up' into P5; wiring.md omits this. Geometric inference (mine and the researcher's agree, but it assumes P7 opens toward the board edge; P7's contact side is undocumented): tail pin 1 (GND) meets P7 pin 1 (GND silk) only when the tail is flipped relative to a face-up panel - panel face-down, tail folded behind the panel, or a 180-degree twist of the tail. The 3.3V-GND short check is not sufficient to catch a mirrored insertion (mirror mapping puts 3.3 V on panel SDA and GND on panel SCL, no short); the real acceptance test is an I2C ACK at 0x5D/0x14 immediately after first power-up, and if none, power off and flip. Record on arrival which tail face carries the gold contacts and which side of P7 has contacts, since that also decides top- vs bottom-contact for any replacement breakout.",
+    "reasoning": "Spec PDF (ESP32-FTS02.pdf, streamed through pdftotext; WebFetch got 403 but a browser UA works) section 3.3 verbatim: 'For touchscreens under 2.9 inches, use the P6 interface; for touchscreens above 3.7 inches , use the P7 interface. Note: 2.9-inch and 7.5-inch touchscreens must be inserted in reverse orientation into the corresponding interface.' Section 3.2: 'place the e-paper display face up and insert the FPC into the P5 connector'. wiring.md (read in full) has no mention of orientation. TP075-Y01 drawing, front view, shows '6 | 1' at the tail end (pin 6 left, pin 1 right, tail pointing down) and the side view labels 'CONTACT' and 'PI Stiffener' on opposite faces. Product page 483 lists ESP32-FTS02 as the driver board for GDEY075T7-T01 and confirms GT911. I re-did the geometry independently: photo shows P7 at the right board edge with 'GND' silk at its upper end and '6' at the lower end; with the panel face-up to the right of the board and the tail entering leftwards, a 90-degree CW rotation of the front view puts pin 6 at the top and pin 1 at the bottom, i.e. mirrored against P7; flipping the tail about its insertion axis (panel face-down, tail folded 180 degrees behind the panel, or simply a 180-degree twist of the 47 mm tail) puts pin 1 on the GND end. That matches Good Display's 'reverse' note, so the inference is coherent - but it rests on two things I could NOT verify from documents: that P7 opens toward the board edge, and which contact side (top/bottom/dual) P7 has. From the low-res side view the IC bump and the 'CONTACT' label appear on the same (front/glass) face with the steel stiffener + DSA on the back, suggesting contacts face the viewer when the panel is face-up - low confidence. One weakness in the recommended action: a 3.3V-GND continuity check will NOT detect a mirrored insertion. If P7 were a dual-contact connector and the tail went in un-flipped, the mapping would be panel GND<->A5, VDD<->A4, RST<->A0, INT<->A3, SDA<->3.3V, SCL<->GND: no dead short, but 3.3 V hard on the GT911 SDA pin with VDD unpowered.",
+    "sources": [
+     "https://v4.cecdn.yun300.cn/100001_1909185148/ESP32-FTS02.pdf",
+     "https://v4.cecdn.yun300.cn/100001_1909185148/TP075-Y01.pdf",
+     "https://ueeshop.ly200-cdn.com/u_file/UPBG/UPBG827/2509/photo/7eabc4d463.png",
+     "https://www.good-display.com/product/483.html",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/docs/wiring.md"
+    ]
+   }
+  },
+  {
+   "id": "T5",
+   "claim": "FTS02 outline is 58.6 x 54.7 mm, so the recap's '~60x55' is close enough. The board is not thin, though. Its back side carries vertical male pin headers (P8-P11), a 2x20 female Raspberry Pi socket and the microSD slot. The top side has USB-C, two slide switches, a DIP switch and a trimmer. I estimate about 13-14 mm overall, and over 20 mm with Dupont housings plugged onto the vertical pins. That is incompatible with 'total thickness 15-16 mm' and with placing it 'under the battery'. Mounting holes exist (4 visible in photos) but are not dimensioned in any Good Display document.",
+   "evidence": "Spec table 'Dimension 58.6x 54.7mm' and the identical product-page figure. The annotated photo (board marked v3.0-20250819): item 9 is a black 2x20 socket on the back, items 10 and 12 are pin headers on the back, item 11 is a microSD slot on the back. The spec captions 'Figure 6 Raspberry Pi Interface (on the back of the adapter board)' and 'Figure 8 ... (interfaces on the back of the adapter board)'. The height is my estimate from standard parts (8.5 mm 2.54 mm socket + 1.6 mm PCB + about 3.5 mm top parts; Dupont housing 14 mm); it is not in the datasheet.",
+   "sources": [
+    "https://v4.cecdn.yun300.cn/100001_1909185148/ESP32-FTS02.pdf",
+    "https://www.good-display.com/product/697.html",
+    "https://ueeshop.ly200-cdn.com/u_file/UPBG/UPBG827/2509/photo/7eabc4d463.png",
+    "https://buy-lcd.com/products/esp32-fts02"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Treat the FTS02 as a bench bring-up tool only. Do not design the MakerWorld shell around it. If it must go in a case, use right-angle Dupont or soldered wires and budget 14 mm or more plus walls. Measure the real height and hole positions on arrival.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Claim stands. Outline 58.6 x 54.7 mm is documented; height is not documented anywhere and about 13-14 mm bare (8.5 mm back-side socket/headers + 1.6 mm PCB + about 3.3 mm top parts) is an estimate I reproduce independently; more than 20 mm with straight Dupont housings on the vertical back-side pins. Incompatible with a 15-16 mm total stack that also holds a 6 mm battery. Mounting holes are visible but undimensioned in Good Display documents.",
+    "reasoning": "Dimension verified in two primary places: spec table 'Dimension 58.6x 54.7mm' (ESP32-FTS02.pdf) and product page 697 '58.6x 54.7mm'; buy-lcd repeats 'Outside Dimension 58.6x 54.7mm' (price there is $9.86, list $11.59). Spec captions verified verbatim: 'Figure 5 micro SD Card Interface (on the back of the adapter board)', 'Figure 6 Raspberry Pi Interface (on the back of the adapter board)', 'Figure 8 ESP32-L Mainboard Connection Diagram (interfaces on the back of the adapter board)'. I viewed the annotated photo (board marked v3.0-20250819): back side carries the black 2x20 female socket (item 9), male pin headers P8-P11 with pins toward the viewer (items 10, 12) and the microSD slot (item 11); top side carries USB-C (3), trimmer R14 (2), slide switches P2 and P3, the 4-way DIP SS1, and the FPC sockets. The spec text contains no height, thickness, hole or mounting dimension (grep for thick/height/hole/mount returned nothing). Height is an estimate, not a datasheet value; my own arithmetic agrees: 8.5 mm (standard 2.54 mm female socket; male header plastic 2.54 + 6.1 mm pin is about the same) + 1.6 mm PCB + about 3.2-3.5 mm (USB-C / DIP switch) = about 13.3-13.6 mm; a straight Dupont housing (about 14 mm) on the 2.54 mm plastic base plus wire bend puts the back side alone above 20 mm. With a 6.0 mm 606090 cell that cannot fit the recap's 15-16 mm. Four holes are visible in the top photo but undimensioned. Only possible mitigation I can see: the male headers are through-hole, so wires can be soldered to their top-side joints and the pins clipped, but the 2x20 socket (8.5 mm) still sets about 13.5 mm unless desoldered.",
+    "sources": [
+     "https://v4.cecdn.yun300.cn/100001_1909185148/ESP32-FTS02.pdf",
+     "https://www.good-display.com/product/697.html",
+     "https://ueeshop.ly200-cdn.com/u_file/UPBG/UPBG827/2509/photo/7eabc4d463.png",
+     "https://buy-lcd.com/products/esp32-fts02"
+    ]
+   }
+  },
+  {
+   "id": "T6",
+   "claim": "A generic 6-pin 0.5 mm FPC-to-2.54 mm breakout works, because the path is purely passive, and should be the documented part for the final build. It needs two external pull-ups (4.7k, SDA and SCL to 3V3), because the FTS02's R24/R25 disappear and the ESP32-S3 internal pull-ups are too weak. A 10k pull-up on RST is an optional extra. Size drops from 58.6x54.7 mm (3205 mm2, about 13-14 mm tall) to roughly 23x14 mm (about 320 mm2, about 3.6 mm tall with wires soldered). That is about 90% less area and about 10 mm less height, at about 1-2 EUR instead of 10.59 EUR.",
+   "evidence": "Arduino-ESP32 3.3.8 enables only the internal pull-ups (esp32-hal-i2c-ng.c:131 'bus_config.flags.enable_internal_pullup = 1'). The ESP32-S3 internal pull-up is about 45k typical. Rise time t_r = 0.8473*R*C: 45k x 30 pF gives 1.14 us, against 300 ns max for 400 kHz and 1000 ns for 100 kHz. With 4.7k, t_r is 120 ns at 30 pF. The GT911 datasheet I2C test condition is '3.3V host interface voltage, 400Kbps transmission rate, 2K ohm pull-up resistor'. Breakout size example: Proto Advantage FPC 0.5 mm, 10 pins or fewer, DIP adapter '22.86 x 13.97 x 1.6 mm'. The panel tail is 3.5 mm wide with 0.30 mm thick contacts, which is standard 6-pin 0.5 mm FFC geometry.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-i2c-ng.c",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/GT911%20Datasheet_English.pdf",
+    "http://www.proto-advantage.com/store/product_info.php?products_id=3400010",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/TP075-Y01.pdf"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Order a couple of 6-pin 0.5 mm FPC breakouts now, one top-contact and one bottom-contact or a dual-contact type, since they cost cents. Add 2x 4.7k resistors. Validate against the FTS02 during bring-up, then design the shell around the breakout placed within about 40 mm of where the tail exits.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "A generic 6-pin 0.5 mm FPC-to-2.54 mm breakout (with connector fitted; the Proto Advantage example is a bare PCB and only a size reference, 22.86 x 13.97 x 1.6 mm) can replace the FTS02 because the FTS02 touch path is purely passive: P7 -> header nets plus two 10k pull-ups (R24/R25) on SDA/SCL to 3.3V. Without the FTS02, add external pull-ups on SDA and SCL (4.7k recommended; 10k reproduces Good Display's validated setup; internal 45k typ gives about 1.1 us rise at 30 pF, out of spec even at 100 kHz) and a 10k pull-up on RST, which the GT911 datasheet lists as required and which the FTS02 does not provide - unless measurement on arrival shows the tail already has them. Contact side (top/bottom) and pin-1 direction of the breakout must match the tail (see T4); buy both types and verify GND/VDD continuity before power. Area reduction about 90 %, height about 3.6 mm (estimate), price 1-2 EUR (not verified).",
+    "reasoning": "Passive path verified in the schematic netlist: P7 pins go straight to nets GND, 3.3V, A3, A0, A4, A5; the only parts on those nets are R24/R25 (text '10k' at both, pin 1 of each in the 3.3V net, pin 2 on A4/A5). No LDO, switch or level shifter between header 3.3V and P7 VDD. Arduino-ESP32 3.3.8 (package.json 'version': '3.3.8') compiles esp32-hal-i2c-ng.c (guard '#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 0)') and line 131 is exactly 'bus_config.flags.enable_internal_pullup = 1;'. ESP32-S3 datasheet v2.2 DC table: 'RPU Internal weak pull-up resistor - 45 - kOhm'. Arithmetic recomputed: 0.8473 x 45k x 30 pF = 1.144 us (over the 1000 ns Standard-mode and 300 ns Fast-mode limits); 0.8473 x 4.7k x 30 pF = 119 ns. GT911 datasheet sec. 6.1: 'Test condition 2: 3.3V host interface voltage, 400Kbps transmission rate, 2K ohm pull-up resistor' and pin table '/RSTB ... External 10K pull-up resistor required'. TP075-Y01 drawing: tail 3.50 +/-0.1 mm wide, 'P 0.5X5=2.5', contact thickness 0.30 -> standard 6-way 0.5 mm FFC geometry ((6+1) x 0.5 = 3.5 mm). Areas: 58.6 x 54.7 = 3205 mm2; 22.86 x 13.97 = 319 mm2 (-90 %). Proto Advantage page returned 403 to me; the 22.86 x 13.97 x 1.6 mm figure came back only via a search-engine snippet of the same URL. Two corrections: (1) the Proto Advantage item is a bare adapter PCB onto which you solder your own FPC connector, so it is a size reference, not the part to buy - the 1-2 EUR generic breakouts with connector fitted are the right class, price unverified; (2) whether the panel tail itself carries SDA/SCL or RST pull-ups is unknown (the FTS02 adding 10k suggests it does not) - measurable on arrival, unpowered, SDA-to-VDD and SCL-to-VDD resistance at the tail. Note the firmware runs Wire at 400 kHz: with the FTS02's 10k in parallel with 45k (8.2k) and about 50 pF of Dupont + tail, t_r is about 350 ns, slightly over the 300 ns Fast-mode limit, so 4.7k (or 100 kHz) is justified on the FTS02 too.",
+    "sources": [
+     "https://v4.cecdn.yun300.cn/100001_1909185148/ESP32-FTS02_SCH-20250819.pdf",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-i2c-ng.c",
+     "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf",
+     "https://v4.cecdn.yun300.cn/100001_1909185148/GT911%20Datasheet_English.pdf",
+     "https://v4.cecdn.yun300.cn/100001_1909185148/TP075-Y01.pdf",
+     "http://www.proto-advantage.com/store/product_info.php?products_id=3400010"
+    ]
+   }
+  },
+  {
+   "id": "T7",
+   "claim": "Good Display's official ESP32 sample for this exact panel (T075T7_GT911_Arduino, V2.3.5, 2025-07-17) uses 8-bit address 0xBA/0xBB = 7-bit 0x5D (0x28/0x29 = 0x14 is the alternative). It bit-bangs I2C and never resets the GT911. It never writes a config block: GT9XX_Initial() only sets pin modes. The config array in the source is X=480/Y=800 and carries the comment 'The predefined one is just a sample config, which is not suitable for your tp in most cases'. Conclusion (inference): the panel ships with its config pre-flashed in the GT911, and host firmware must not send a config. The project firmware agrees: it uses 0x5D, status register 0x814E, point register 0x8150, and makes no config write.",
+   "evidence": "GT911.h: '#define GT910_ADDR_BABBH', '#define GT910_IIC_RADDR 0xBB', '#define GT910_IIC_WADDR 0xBA'. GT911.cpp: 'ErrorStatus GT9XX_Initial(void){ iic_init(); return SUCCESS; }'. grep shows gtp_reset_guitar() is never called and gtp_send_cfg() is called only inside the 'CHIP_TYPE_GT9F == ts.chip_type' branch, which is unreachable because ts is zero-initialised to CHIP_TYPE_GT9. CTP_CFG_GROUP begins '0x00,0xE0,0x01,0x20,0x03' (X max 0x01E0 = 480, Y max 0x0320 = 800). Coordinates are read from 0x814E+2..5 (x = bytes 2,3; y = bytes 4,5) and 0 is written back to 0x814E afterwards, as in gt911.cpp. GT911 datasheet: 'GT911 supports two I2C slave addresses: 0xBA/0xBB and 0x28/0x29. The host can select the address by changing the status of Reset and INT pins during the power-on initialization phase'; 'Stationary Configuration ... GT911 will fix parameters to the latest version'.",
+   "sources": [
+    "https://www.good-display.com/companyfile/1838.html",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/T075T7_GT911_Arduino.rar",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/GT911%20Datasheet_English.pdf",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Never write 0x8047.. from the firmware. At boot, read and log the product ID (0x8140), config version (0x8047), X/Y max (0x8048-0x804B) and Module_Switch1 (0x804D), so the real factory config is documented for MakerWorld users."
+  },
+  {
+   "id": "T8",
+   "claim": "Touch coordinates are landscape 800x480 in the same frame as the display's native orientation (GxEPD2 rotation 0), with X not mirrored and X/Y not swapped. The firmware's rotation-0 pass-through is therefore correct for X. The Y direction is not proven by the sample.",
+   "evidence": "Sample .ino: a touch with 'x[0]>500 && x[0]<800 && y>0 && y<480' runs EpdNum++, and 'x[0]>0 && x[0]<300' runs EpdNum--. I decoded the sample's 800x480 base bitmap gImage_basemapT in memory. It shows a circled minus at x about 160-260 (left) and a circled plus at x about 600-700 (right), and the text reads normally left to right. The sample sets panel setting register 0x00 = 0x1F, and the GxEPD2 GDEY075T7 driver uses the same scan direction ('_writeCommand(0x00); _writeData(0x1f);'), so both draw in the same orientation.",
+   "sources": [
+    "https://v4.cecdn.yun300.cn/100001_1909185148/T075T7_GT911_Arduino.rar",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/gdey/GxEPD2_750_GDEY075T7.cpp"
+   ],
+   "confidence": "medium",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Keep rotation 0 as the default. In the phase-1 serial log, print raw x,y for the four corners once, to confirm the Y direction. Expose TOUCH_MIRROR_X / TOUCH_MIRROR_Y / TOUCH_SWAP_XY as config flags."
+  },
+  {
+   "id": "T9",
+   "claim": "Putting touch INT on GPIO43 (D6 = U0TXD) and RST on GPIO44 (D7 = U0RXD) is a poor choice for roadmap phase 4. GPIO43/44 are not RTC GPIOs on the ESP32-S3, so a touch can never wake the XIAO from deep sleep (ext0/ext1). Their state is also not retained in deep sleep without gpio_hold, so RST floats. In addition, GPIO43 is driven push-pull by the boot ROM and bootloader UART0 log at every reset, while the GT911 also drives INT as an output. That causes brief output contention and makes the address selection at power-on random until the firmware re-resets the chip.",
+   "evidence": "ESP-IDF sleep-modes doc for ESP32-S3 gives the RTC IO range for ext0/ext1 as 'ESP32-S3: 0-21', and says 'Internal pullups and pulldowns don't work when RTC peripherals are shut down'. variants/XIAO_ESP32S3_Plus/pins_arduino.h: 'static const uint8_t TX = 43; RX = 44; D6 = 43; D7 = 44'. The same file lists the Plus back pads as D11-D19 = GPIO38,39,40,41,42,10,13,12,11 and 'ADC_BAT = 10'. wiring.md's 'GPIO 47, 48, 38' is therefore wrong: GPIO47/48 do not exist on the Plus. GT911 datasheet sleep mode: 'requires INT output low before the command ... exits Sleep mode ... when host outputs a high level to INT pin for 2ms to 5ms'. Gesture mode: 'INT will output a pulse for longer than 250us or a high level causing the host to wake up'. Currents: normal 8 mA typ, green 3.3 mA, doze 0.78 mA, sleep 70-120 uA.",
+   "sources": [
+    "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/system/sleep_modes.html",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/GT911%20Datasheet_English.pdf",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/config.h"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "While nothing is wired, move INT to an RTC-capable pin. For example: INT -> D9 (GPIO8), buzzer -> D7 (GPIO44, silent at boot), RST -> D6 (GPIO43). Alternatively use back pads GPIO11/12/13 on the Plus. If GPIO8 is reassigned, call SPI.begin(EPD_SCK, -1, EPD_MOSI, EPD_CS) so SPI never claims GPIO8 as MISO. First confirm with the Seeed driver-board thread that D9 is really free on that board. If 43/44 are kept, add a 1k series resistor on INT and accept button-only wake.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "INT on GPIO43 (U0TXD) and RST on GPIO44 (U0RXD) is a poor choice for phase 4: only GPIO0-21 are RTC IOs on the ESP32-S3, so a GT911 INT on GPIO43 can wake the XIAO from light sleep but never from deep sleep (ext0/ext1). GPIO43 is driven push-pull with ROM/bootloader text at every reset (datasheet default: ROM prints to UART0 and USB-Serial-JTAG) while the GT911 drives INT as an output -> brief contention; and because U0TXD sits high at power-on the GT911 initially comes up at 0x14 until the firmware's reset sequence (INT low) moves it to 0x5D. Pin state on GPIO43/44 in deep sleep is only kept with gpio_hold_en + gpio_deep_sleep_hold_en; an external 10k pull-up on RST (required by the GT911 datasheet, absent on the FTS02) is the robust fix. wiring.md's 'GPIO 47, 48, 38' is wrong for the Plus pads: D11-D19 = GPIO38,39,40,41,42,10,13,12,11, and GPIO10/D16 doubles as ADC_BAT. Among castellated pins the only free RTC-capable one is D9/GPIO8, so the researcher's remap (INT->D9, RST->D6, buzzer->D7, SPI.begin(EPD_SCK,-1,EPD_MOSI,EPD_CS)) works; an alternative I infer (not from a source) keeps the buzzer on D9 and gives BOTH INT and RST RTC pins: I2C moved to D6/D7 (SCL=GPIO43, SDA=GPIO44 via GPIO matrix; boot text toggling SCL with SDA high generates no START) and INT->D4/GPIO5, RST->D5/GPIO6. Whether D9/D4/D5 are truly unused by the Seeed driver board is not established by its wiki.",
+    "reasoning": "ESP-IDF sleep-modes doc (ESP32-S3, stable) gives ext0/ext1 RTC IO range '0-21' and says 'Internal pullups and pulldowns don't work when RTC peripherals are shut down. In this case, external resistors need to be added.'; gpio_wakeup 'can only be used to wakeup from light sleep though'. GPIO doc: gpio_hold_en alone 'cannot be used to hold the state of a digital GPIO during Deep-sleep' on S3; gpio_deep_sleep_hold_en is additionally needed. Local variant file XIAO_ESP32S3_Plus/pins_arduino.h read directly: 'TX = 43; RX = 44', 'D6 = 43', 'D7 = 44', D11..D19 = 38,39,40,41,42,10,13,12,11, 'ADC_BAT = 10'; Seeed wiki lists the same pads and 'ADC_BAT - GPIO10 - Read the BAT voltage value'; no GPIO47/48 pad, so wiring.md line 35 ('GPIO 47, 48, 38') is wrong. ESP32-S3 datasheet v2.2: pins 49/50 U0TXD/U0RXD 'WPU, IE' at and after reset, function 0 = U0TXD output; sec. 3.3 'ROM Messages Printing Control ... (Default) UART0 and USB Serial/JTAG controller' - so GPIO43 is driven push-pull with boot text at every reset even though platformio.ini sets ARDUINO_USB_CDC_ON_BOOT=1. GT911 datasheet quotes verified verbatim (sleep: 'requires INT output low before the command' ... 'exits Sleep mode ... when host outputs a high level to INT pin for 2ms to 5ms'; gesture: 'INT will output a pulse for longer than 250us or a high level'; DC table p.23: normal 8 mA typ / 14.5 max, green 3.3 mA, doze 0.78 mA, sleep 70-120 uA). SPI.begin with miso = -1 is valid in core 3.3.8 (SPI.cpp: 'if (_miso >= 0 && !spiAttachMISO(...))'), and I checked that tone() stealing GPIO8 today only detaches MISO (spiDetachBus_MISO stops the bus only if sck == -1 or both data pins are -1). Corrections: (a) power-on address is not 'random' but biased to 0x14, because U0TXD idles high (weak pull-up, then UART idle-high) when the GT911 leaves its own power-on reset; the firmware's reset sequence then forces 0x5D, so impact is only the boot-time contention. (b) 'RST floats in deep sleep' is avoidable in software (gpio_hold_en + gpio_deep_sleep_hold_en) or with the 10k RST pull-up the datasheet requires; what cannot be fixed on GPIO43/44 is touch wake from DEEP sleep (light sleep can wake from any GPIO). (c) GPIO47/48 exist on the chip; they are just not on the Plus solder pads (B2B connector contents not verified). (d) D16 = GPIO10 is shared with ADC_BAT, so it is not a free pad. (e) The proposed remap puts RST on U0TXD: ROM text produces low pulses up to about 78 us at 115200 baud, just under the datasheet's host-reset T1 > 100 us, harmless because the firmware re-resets, but it still needs the RST pull-up for sleep. I could not confirm from the Seeed wiki that D9/GPIO8 (or D4/D5) is unused by the driver board - the wiki table lists only RST D0, CS D1, BUSY D2, DC D3, SCK D8, MOSI D10.",
+    "sources": [
+     "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/system/sleep_modes.html",
+     "https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-reference/peripherals/gpio.html",
+     "https://documentation.espressif.com/esp32-s3_datasheet_en.pdf",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/SPI/src/SPI.cpp",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.c",
+     "https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/",
+     "https://wiki.seeedstudio.com/xiao_eink_expansion_board_v2/",
+     "https://v4.cecdn.yun300.cn/100001_1909185148/GT911%20Datasheet_English.pdf",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/config.h"
+    ]
+   }
+  },
+  {
+   "id": "T10",
+   "claim": "Wire.begin(..., 400000) is marginal on the FTS02 path. The pull-ups are 10k (about 8.2k in parallel with the ESP32 internal 45k) and the bus is about 10 cm of Dupont plus FTS02 traces and stubs to P6/P1 plus a 47 mm FPC. This gives an estimated rise time of 280-420 ns against the 300 ns Fast-mode limit. Touch polling needs a few kbit/s, so 100 kHz costs nothing.",
+   "evidence": "FTS02 schematic: R24 10k and R25 10k are the only pull-ups on A4/A5. t_r = 0.8473 x 8.2k x (40-60 pF) = 278-417 ns; the 40-60 pF bus capacitance is my estimate, not a measurement. The GT911 datasheet characterises 400 kbps with a '2K ohm pull-up resistor' and says 'It is strongly recommended that transmission rate be kept at or below 400Kbps'. Good Display's own sample bit-bangs at roughly 30 kHz (10 us delays per half bit). Firmware main.cpp line 34: 'Wire.begin(TP_SDA, TP_SCL, 400000);'.",
+   "sources": [
+    "https://v4.cecdn.yun300.cn/100001_1909185148/ESP32-FTS02_SCH-20250819.pdf",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/GT911%20Datasheet_English.pdf",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/main.cpp"
+   ],
+   "confidence": "medium",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Use 100000 Hz for bring-up. Raise to 400 kHz only with 2.2-4.7k pull-ups and short wires."
+  },
+  {
+   "id": "T11",
+   "claim": "There are small defects in gt911.cpp. (a) config.h and wiring.md promise a 0x14 fallback, but begin() only tries _addr. (b) The rotation maths is wrong for cases 1 and 3: case 1 maps y in 0..479 to x in 320..799, and case 3 produces a negative y. (c) RST is held low for exactly 10 ms, while the Goodix timing (as in the Linux driver) wants more than 10 ms, typically 20 ms. (d) begin() only checks id[0]=='9' and logs nothing about the config.",
+   "evidence": "gt911.cpp lines 10-18 (single address, 'delay(10)' with RST low). Lines 43-46: 'case 1: { int16_t t = x; x = EPD_W - 1 - y; y = t; }' should be x = EPD_H-1-y; 'case 3: { ... x = y; y = EPD_H - 1 - t; }' should be y = EPD_W-1-t. config.h line 21: '#define TP_I2C_ADDR 0x5D // GT911 default; 0x14 se INT alto al reset'. Linux goodix.c reset sequence: 'msleep(20); /* T2: > 10ms */ ... usleep_range(6000, 10000); /* T4: > 5ms */ ... msleep(50); /* T5: 50ms */'. The Linux timing values are recalled from memory, not re-fetched.",
+   "sources": [
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/config.h"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": true,
+   "recommended_action": "In begin(): hold RST low 20 ms; after the reset, probe 0x5D then 0x14, and on failure retry with SDA/SCL swapped; store the working address. Fix the rotation formulas, or replace them with mirror/swap flags. Log product ID, config version and X/Y max.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "(a) begin() probes a single address; the docs (README line 25, config.h comment, main.cpp message - not wiring.md) offer only a manual switch to 0x14, and that switch cannot work as written because begin() always holds INT low during reset, which selects 0x5D; fix: drive INT = (_addr == 0x14) during reset as Linux does, or probe 0x5D then 0x14 and store the hit. (b) Rotation cases 1 and 3 are wrong (case 1 yields x in 320..799, case 3 yields y down to -320); correct ranges need EPD_H in case 1 and EPD_W in case 3, AND the two cases must be swapped to match Adafruit_GFX/GxEPD2 numbering (GFX rot 1: x' = y, y' = 799 - x; rot 3: x' = 479 - y, y' = x). Currently dead code (rotation 0 everywhere). (c) Not a defect: the GT911 datasheet's host-reset timing needs RESET low > 100 us (the > 10 ms figure is the power-on T2); 10 ms already has 100x margin. Raising to 20 ms to mirror Linux is harmless; the tighter margin is actually INT-low-after-RST-high = 60 ms vs T3+T4 = 55 ms. (d) begin() checks only id[0]=='9' and logs neither config version (0x8047) nor X/Y max (0x8048-0x804B).",
+    "reasoning": "Read gt911.cpp, gt911.h, config.h, main.cpp, README.md, wiring.md directly. (a) begin() uses only _addr (lines 15-18, readRegs with _w.beginTransmission(_addr)); true. But the wording is off: wiring.md never mentions 0x14; config.h line 21 is a comment ('0x14 se INT alto al reset'), README line 25 says to edit TP_I2C_ADDR by hand, main.cpp line 35 prints '(0x5D/0x14)'. So the docs promise a MANUAL fallback - and that manual fallback is itself broken, which the researcher missed: begin() always drives INT LOW through reset (line 11), which per the GT911 datasheet ('Timing for setting slave address to 0xBA/0xBB') selects 0x5D, so setting TP_I2C_ADDR to 0x14 can only ever work if the INT/RST wires are not functioning. Linux does 'goodix_irq_direction_output(ts, ts->client->addr == 0x14)' (re-fetched from torvalds/linux master). (b) Arithmetic verified: case 1 gives x = 799 - y in [320,799] for a 480-wide frame; case 3 gives y = 479 - x in [-320,479]. The proposed fixes (x = EPD_H-1-y; y = EPD_W-1-t) repair the ranges, but are still mis-numbered against GxEPD2/Adafruit_GFX: GFX rotation 1 is raw_x = WIDTH-1-y_r, raw_y = x_r, whose inverse is x_r = raw_y, y_r = 799 - raw_x (the 'fixed case 3' formula), and GFX rotation 3 inverts to x_r = 479 - raw_y, y_r = raw_x (the 'fixed case 1' formula). So cases 1 and 3 must also be swapped if touch.setRotation(n) is meant to track display.setRotation(n) (assuming touch raw axes equal display native axes - not verified). Dead code today: main.cpp uses display.setRotation(0) and never calls touch.setRotation. (c) Overstated. I viewed GT911 datasheet p.12: 'Timing for host resetting GT911' requires T1 > 100 us RESET low, T2 > 100 us INT setup, T3 > 5 ms, T4 > 50 ms; the '> 10 ms' figure is T2 of the POWER-ON timing (VDDIO up to address select). The firmware's delay(10) is 100x the host-reset minimum, and its 60 ms INT-low after RST high covers T3+T4 = 55 ms (thin margin). Linux goodix.c does use 'msleep(20); /* T2: > 10ms */', 'usleep_range(100, 2000); /* T3: > 100us */', 'usleep_range(6000, 10000); /* T4: > 5ms */', 'msleep(50); /* T5: 50ms */' - confirmed by re-fetch - but that is a conservative choice, not a datasheet requirement for a host reset. 20 ms is harmless, not a defect fix. (d) True: line 18 'return id[0] == '9';' and only the 3-char product id is logged; registers 0x8047 (config version) and 0x8048-0x804B (X/Y max) are never read.",
+    "sources": [
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/config.h",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/main.cpp",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/README.md",
+     "https://v4.cecdn.yun300.cn/100001_1909185148/GT911%20Datasheet_English.pdf",
+     "https://raw.githubusercontent.com/torvalds/linux/master/drivers/input/touchscreen/goodix.c"
+    ]
+   }
+  },
+  {
+   "id": "T12",
+   "claim": "Mechanical data for the shell from the manufacturer drawings. There is no separate cover glass: the touch layer is a 0.48 mm sensor plus 0.15 mm anti-glare film = 0.63±0.1 mm, full-bonded, surface hardness 6H or better, and total module thickness 2.13 mm. The touch viewing area is 164.20 x 98.92 mm against a display active area of 163.2 x 97.92 mm, and the sensor outline height is 109.21 mm. The touch tail is 3.5 mm wide and extends 47.06±0.5 mm beyond the glass edge on the same long edge as the 24-pin display FPC. Its right side is 127.65±0.5 mm from the right glass edge in front view, i.e. about 39-42.6 mm from the left edge, which becomes the right side when seen from the back. The GT911 sits on the tail, with a 15 x 14 mm steel stiffener plus adhesive tab on the tail's back face, starting about 4.5 mm from the glass edge.",
+   "evidence": "TP075-Y01 drawing: '0.63 ±0.1', '0.15 ±0.05 AGF', '0.48 ±0.05 SENSOR', '164.20 AGF VA', '98.92 AGF VA', '109.21±0.2 SENSOR/AGF OD', '47.06±0.5', '127.65±0.5', '3.50±0.1', 'Steel Stiffener + DSA ... T=0.2mm', '15.00', '14.00', '4.50', 'Surface hardness:L>=6H', 'Full bonding process'. GDEY075T7-T01 spec p.4: 'Outline Dimension 170.20(H)x111.20(V)x2.13(D)', 'Active Area 163.20x97.92', weight '65±0.5 g'; p.5 drawing shows the 24-pin tail as '24.00±0.30' wide.",
+   "sources": [
+    "https://v4.cecdn.yun300.cn/100001_1909185148/TP075-Y01.pdf",
+    "https://v4.cecdn.yun300.cn/100001_1909185148/GDEY075T7-T01.pdf"
+   ],
+   "confidence": "medium",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Size the bezel window between the active area and viewing area (about 163.5 x 98.2 mm). Leave a 16 x 15 mm pocket for the GT911 stiffener behind the lower-left area (front view). Place the touch breakout within about 40 mm of where the tail exits. Do not fold the tail tighter than about 1 mm radius and do not put stress on the IC area."
+  }
+ ],
+ "unknowns": [
+  "Contact side of the 7.5\" touch tail and of the P7 connector (top or bottom contact). No document states it outright. Good Display says only 'inserted in reverse orientation'; the TP075-Y01 side view labels CONTACT and PI stiffener but at low resolution. Check visually on arrival, because it decides which way the FTS02 or breakout faces in the case and which breakout type to buy.",
+  "Whether the panel's touch FPC already carries I2C pull-ups and the 10k RST pull-up the GT911 datasheet requires. Good Display's demo never drives RST (A3 = GPIO39 is input-only on a classic ESP32), which suggests RST is pulled up on the FPC, but this is an inference.",
+  "Y-axis direction of the raw touch coordinates relative to GxEPD2 rotation 0. The sample proves only that X is not mirrored and that X/Y are not swapped.",
+  "The pre-flashed config itself: its version, the Module_Switch1 INT trigger polarity, and whether gesture wake-up is enabled, which would matter for wake-on-touch. It is only readable from the chip at 0x8047-0x80FF.",
+  "FTS02 mounting-hole positions and diameters and the real overall height. The spec gives only the 58.6 x 54.7 mm outline; my 13-14 mm height is estimated from photos and standard part sizes.",
+  "Whether R16 (10k to 3.3V) and R17 (0 ohm to GND) on the BS line are both populated on the FTS02 v3.0-20250819. If so, there is a permanent 0.33 mA drain from the 3.3 V rail.",
+  "Whether the Seeed ePaper Driver Board exposes D4-D7/D9/3V3/GND for wires while the XIAO is seated. The wiki mentions an 'IO Break out', but I did not find a pin list. I also do not know whether that board uses D9 or D6/D7 for anything. This belongs to the driver-board thread and affects the INT re-pin proposal.",
+  "'Sketch Map.png' (the wiring picture inside Good Display's sample archive) and figures 3, 7 and 8 of the FTS02 spec were not viewed. Only the text and the schematic were read.",
+  "The GT911 reset timing values T2-T5 appear only as figures in the datasheet. The numbers quoted come from my memory of the Linux goodix driver and were not re-fetched."
+ ],
+ "questions_for_user": [
+  "Should the board wake up when you touch the screen, or is a physical button or the driver-board power switch acceptable? Wake-on-touch needs INT on an RTC-capable GPIO (not D6/D7) and keeps the GT911 drawing about 0.8-3.3 mA while 'asleep'. Button wake lets the GT911 sleep at about 0.1 mA.",
+  "For the MakerWorld build, is light soldering acceptable for builders (about 6 wires onto a roughly 23x14 mm FPC breakout, plus two 4.7k resistors), or must the build be solder-free with Dupont only? Solder-free forces the 58.6x54.7 mm, roughly 14 mm tall FTS02 into the shell.",
+  "Is 15-16 mm total thickness a hard target, or is about 20 mm acceptable? With the FTS02 inside and Dupont connectors on its vertical pins, 15-16 mm is not reachable.",
+  "In which orientation will the board be used: landscape with the FPC edge toward the player, FPC edge at the side, or portrait? Should the view flip 180 degrees for a second human player? This fixes the touch rotation and mirror handling and where the 47 mm touch tail and its breakout can live.",
+  "Are you willing to solder to the XIAO Plus back pads (GPIO11/12/13) if we run out of RTC-capable pins? Or must everything stay on the 14 edge pins that go through the Seeed driver-board socket?",
+  "Do you have a multimeter with a continuity mode, and ideally a cheap USB logic analyzer? The first power-up of the touch path (3.3V/GND short check, I2C scan, SDA/SCL swap check) is much safer with them."
+ ]
+}

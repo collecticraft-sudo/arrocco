@@ -1,0 +1,456 @@
+{
+ "summary": "Static review of the phase-1 firmware against the real environment (pioarduino 55.03.38, Arduino-ESP32 3.3.8 sources on disk, GxEPD2 master and tag 1.6.2 via raw GitHub, Linux goodix.c and TAMC_GT911 for register truth, Seeed driver-board wiki and schematic PDF). FW = /private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess. Nothing was compiled or modified. One side effect: WebFetch saved the Seeed schematic PDF on its own into the session tool-results folder.\n\nVerdict: the firmware will very probably boot and draw. The display pin map matches the Seeed schematic. The GT911 registers and their decoding are correct. a1 is dark, h1 is light, and the start string is 64 characters with K on e1 and Q on d1. `%lu` is correct for uint32_t on this toolchain. tone() on the MISO pin is safe on 3.3.8.\n\nSeveral things will bite or mislead on first power-up:\n1. Byte alignment is confirmed. Every 60-px square refresh becomes a 64-px window whose extra 4 columns are written white over one horizontal neighbour. The board outline is also erased on edge squares.\n2. A move costs four sequential partial refreshes of about 450 ms each (select, from, to, status). The on-screen \"ms\" is the time of two of them, not one as the README says. One bounding-box window would cut a move to about one refresh.\n3. A touch is logged only after hitTest succeeds. If the touch X axis is mirrored or swapped, the log stays silent, which defeats the hardware validation this phase exists for.\n4. There is no runtime fallback to address 0x14. When the GT911 is missing, the loop polls at 100 Hz and each poll emits a Wire log_e (CORE_DEBUG_LEVEL=2), so the console floods.\n5. GT911 rotation cases 1 and 3 use the wrong dimension constant and produce out-of-range coordinates. This is dormant at rotation 0.\n6. TP_INT on GPIO43 is U0TXD. The ROM and IDF console drive it from reset until begin(). It is also not an RTC GPIO (RTC IOs are GPIO0..21), so touch can never wake deep sleep in phase 4. Swapping INT to D9/GPIO8 and the buzzer to D6 is free now because nothing is wired.\n7. GxEPD2 never powers the panel off after a partial refresh, so the booster stays on while idle.\n8. The Seeed schematic shows no battery sense at all. The battery feeds an ETA9740 boost whose output goes to the XIAO 5V pin, and every ADC-capable header pin is already used. The phase-4 battery gauge needs 2 resistors plus a Plus back pad (GPIO10).\n9. platformio.ini uses the non-Plus board, so the image header says 8MB. It boots only because upload uses `--flash-size detect`; merged release binaries would carry the 8MB header. Pairing the stock `platform = espressif32` with the Plus board id fails, because the official platform has no Plus board; pin pioarduino when switching.\n\nSmaller items: the dark-square dither is 12.5 % isolated pixels and may be invisible on the panel. The 24pt letters are too large for the r=22 disc. The GT911 point read ignores I2C errors. Taps made during a refresh are replayed afterwards. The large-touch bit and multi-touch are ignored. T2 in the reset sequence is exactly 10 ms where the datasheet asks for more than 10 ms. 400 kHz I2C over Dupont wires with only internal pull-ups is marginal.\n\nFive concrete additions that would make phase 1 a better hardware-validation tool are listed in the last finding.",
+ "findings": [
+  {
+   "id": "F01-partial-window-byte-alignment",
+   "claim": "CONFIRMED hypothesis (a). GxEPD2 widens every 60-px square window to 64 px in x. The extra 4 columns are sent as WHITE, overwriting one horizontal neighbour. Files a,c,e,g wipe the left 4 px of the square to their right. Files b,d,f,h wipe the right 4 px of the square to their left. It shows whenever the refreshed square is light, because its neighbour is then dark and loses 4 px of dither. Y is not aligned, so there is no vertical spill. FW/src/board_ui.cpp:80-85.",
+   "evidence": "GxEPD2_BW.h setPartialWindow (master and tag 1.6.2): `_pw_w += _pw_x % 8; if (_pw_w % 8 > 0) _pw_w += 8 - _pw_w % 8; _pw_x -= _pw_x % 8;`. firstPage() calls `fillScreen(GxEPD_WHITE)`. drawPixel clips with `if ((x < 0) || (x >= int16_t(_pw_w)) ...) return;`, so only the target square is painted into the widened white buffer. GxEPD2_750_GDEY075T7::_setPartialRamArea: `xe = (x + w - 1) | 0x0007; x &= 0xFFF8;`. Computed windows: a:0..63 (spill right 4), b:56..119 (spill left 4), c:120..183, d:176..239, e:240..303, f:296..359, g:360..423, h:416..479. File h never reaches the side column. The piece disc spans x+6..x+54, so pieces are not clipped.",
+   "sources": [
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_BW.h",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/1.6.2/src/GxEPD2_BW.h",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/gdey/GxEPD2_750_GDEY075T7.cpp",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/board_ui.cpp"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Minimal fix: inside the drawSquare page loop, also paint file-1 and file+1. GxEPD2 clips to the window: `for(int df=-1;df<=1;df++){int nf=file+df; if(nf<0||nf>7)continue; paintSquare(b,nf,rank,df==0&&highlight);}`. Better fix: one partial window over the bounding box of the from and to squares, repainting every square inside it (see F03). That removes the artefact and halves latency. Alternative: SQ=56 with BOARD_X=16. Everything is then byte-aligned, and the 16-px gutters can hold a-h/1-8 labels.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As stated. Additional detail: when the refreshed square is dark the spill lands on a light neighbour and is invisible except that on ranks 1/8 it also erases 4 px of the top/bottom outline (y=0 / y=479) in the neighbour. A horizontal adjacent move (e.g. a1-b1) still leaves the artefact because the second refresh (b: 56..119) wipes x=56..59 of the just-repainted a-square.",
+    "reasoning": "Re-read GxEPD2_BW.h (master L407-420, tag 1.6.2 L407-409 identical): `_pw_w += _pw_x % 8; if (_pw_w % 8 > 0) _pw_w += 8 - _pw_w % 8; _pw_x -= _pw_x % 8;`. firstPage() = fillScreen(GxEPD_WHITE); drawPixel clips to the WIDENED window (`x >= int16_t(_pw_w)`), so paintSquare (x..x+59 only) leaves the 4 extra columns white in the buffer. Driver _writeImage sends the full 64-px-wide buffer to RAM 0x13 inside 0x91/0x92; panel setting 0x50=0x29 (N2OCP copy new->old) means old=dither, new=white in the spill columns, so they are actively driven white. Recomputed windows myself: a 0..63, b 56..119, c 120..183, d 176..239, e 240..303, f 296..359, g 360..423, h 416..479 - matches. Dither puts black pixels at x+0/x+2 and x+56/x+58, so a dark neighbour visibly loses them; piece disc is x+6..x+54 (r+2=24 around x+30), not touched. No y alignment at rotation 0. ^1.6.2 resolves to 1.6.9 today (registry), same code. Proposed fix (paint file-1/file+1 inside the loop; GxEPD2 clips to the window) is valid; SQ=56/BOARD_X=16 is byte-aligned (16+56f all multiples of 8).",
+    "sources": [
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_BW.h",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/1.6.2/src/GxEPD2_BW.h",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/gdey/GxEPD2_750_GDEY075T7.cpp",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/board_ui.cpp"
+    ]
+   }
+  },
+  {
+   "id": "F02-outline-erased",
+   "claim": "CONFIRMED hypothesis (b). The 480x480 outline is drawn only in drawFull (board_ui.cpp:69), and only after the squares. paintSquare starts with `fillRect(x,y,SQ,SQ,WHITE)` (board_ui.cpp:26). The outline sits on x=0, x=479, y=0 and y=479, which belong to edge squares. Any partial refresh of one of the 28 edge squares erases that square's piece of the outline. All pieces start on edge ranks, so the first knight or pawn move already damages it.",
+   "evidence": "board_ui.cpp:69 has `_d.drawRect(BOARD_X, BOARD_Y, 8*SQ, 8*SQ, GxEPD_BLACK)` inside drawFull only. The drawSquare loop at board_ui.cpp:84 calls only paintSquare(). squareRect gives x=file*60 and y=(7-rank)*60, so the outline pixels lie inside the a/h files and ranks 1/8.",
+   "sources": [
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/board_ui.cpp"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": true,
+   "recommended_action": "Move the drawRect into a paintFrame() helper. Call it at the end of every page loop (drawFull, drawSquare, any multi-square refresh). GxEPD2 clips it to the active window. Cost is negligible.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "The outline is drawn only in drawFull (board_ui.cpp:69) and paintSquare starts with a white fillRect, so any partial refresh of one of the 28 edge squares erases that square's segment of the frame. Back-rank pieces (ranks 1/8) and a/h-file pawns sit on edge squares; b-g pawns do not. The first damage happens as soon as a back-rank piece or an a/h pawn is merely SELECTED (highlight refresh), not only when it moves; a central pawn opening (e2-e4) leaves the frame intact. Fix (paintFrame() at the end of every page loop, clipped by GxEPD2) is correct.",
+    "reasoning": "board_ui.cpp:69 is the only drawRect of the 480x480 frame (inside drawFull, after the squares); drawSquare (L80-85) calls only paintSquare, whose first statement (L26) is fillRect(x,y,SQ,SQ,WHITE). With BOARD_X=BOARD_Y=0 the frame pixels are x=0, x=479, y=0, y=479, all inside the 28 edge squares (8+8+6+6), so any partial refresh of an edge square deletes its frame segment (on dark squares it is replaced by dither). One detail of the claim is wrong: pawns start on ranks 2/7, which are NOT edge ranks; only the a- and h-pawn squares touch the frame. 1.e4 / 1.d4 do not damage it. Knight/rook/any back-rank selection does - and already at the SELECT tap, because the highlight refresh repaints g1/b1 etc.",
+    "sources": [
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/board_ui.cpp"
+    ]
+   }
+  },
+  {
+   "id": "F03-move-latency-and-what-dt-measures",
+   "claim": "A move costs 4 sequential blocking partial refreshes: select highlight, from-square, to-square, status. With GxEPD2's 450 ms nominal partial time, that is about 1.9 s of blocked time per move. `dt` (main.cpp:68-73) spans TWO drawSquare calls. It excludes the status refresh, the selection refresh and the beep. It is not \"il tempo di ogni partial refresh\" as README.md:31 says. The first partial after boot, or after the every-20-moves full refresh, also includes _Init_Part and power-on (about 140 ms), because GxEPD2 powers off after full-window pages only. Refresh time on this controller family is set by the waveform, not by window area. That is inference and should be measured.",
+   "evidence": "GxEPD2_750_GDEY075T7.h: `power_on_time = 140`, `full_refresh_time = 1200`, `partial_refresh_time = 450`, `useFastFullUpdate = true`. GxEPD2_BW::nextPage partial branch: writeImage, refresh(x,y,w,h), writeImageAgain, with no powerOff. The full branch ends with `epd2.powerOff()`. GxEPD2_EPD default SPI is `_spi_settings(4000000, MSBFIRST, SPI_MODE0)` with per-byte transfers. A 64x60 window is 480 bytes (negligible). The whole 800x480 frame is 48000 bytes, at least 96 ms per write at 4 MHz and more in practice. With `initial=true`, the boot full-refresh timing also includes the initial screen-buffer clear writes, so it is not representative of later full refreshes.",
+   "sources": [
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/gdey/GxEPD2_750_GDEY075T7.h",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_BW.h",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_EPD.cpp",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/main.cpp"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Refresh from and to squares in ONE partial window: the bounding box of the two squares, or the whole 480x480 board. Draw the status text in a second window only if needed, or use a full-width window that includes the status row. Expected result: about 0.5-0.7 s per move instead of about 1.4 s. Print every refresh time to Serial separately. GxEPD2 diag already prints `_Update_Part : <us>` because init(115200,...) enables it. Fix the README wording. In phase 1, measure three strategies: per-square, bounding box, full-screen partial.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As stated, with two upgrades: (1) window-size independence of the refresh time is verified in source, not inference - GxEPD2_750_GDEY075T7 has usePartialUpdateWindow=false, so every partial issues a whole-panel 0x12 with the fast LUT; merging from+to(+status) into one window therefore costs one ~450 ms refresh plus only the extra SPI bytes (whole 480x480 board = 28.8 kB x2 writes, ~0.15-0.3 s at 4 MHz per-byte; a 2-square bounding box far less). (2) The 450 ms figure is only valid for panels whose OTP holds the fast-partial waveform; GxEPD2's own comment reports ~1.58 s on an earlier batch, so phase 1 must read the `_Update_Part : <us>` diag line before any latency budget is trusted. Blocked time per move ~1.85 s nominal (+~0.14 s power-on after each full refresh).",
+    "reasoning": "main.cpp: tap 1 -> drawSquare(highlight) (L56); tap 2 -> drawSquare(from) L71, drawSquare(to) L72, drawStatus L75 = 4 blocking partials per move; t0 at L68 and dt at L73 bracket exactly the two drawSquare calls, so README.md:31 ('tempo di ogni partial refresh') is wrong. Header re-read: power_on_time=140, full_refresh_time=1200, partial_refresh_time=450, useFastFullUpdate=true. Page buffer = HEIGHT so _pages==1 and each drawSquare = writeImage + one _Update_Part + writeImageAgain. Full-window branch ends with epd2.powerOff() -> _PowerOff clears _power_is_on and _using_partial_mode, so the next partial pays _Init_Part + _PowerOn. GxEPD2_EPD.cpp L24: _spi_settings(4000000,...), per-byte transfer(); 48000 B/frame. initial=true -> _writeImage first calls writeScreenBuffer() = two extra 48000-byte writes (0x13 and 0x10) inside the boot 'full refresh' timing. Diag: _waitWhileBusy prints '<comment> : <us>' when serial_diag_bitrate>0. The researcher's 'inference' that refresh time does not depend on window area is actually SOURCE-BACKED: header has `usePartialUpdateWindow = false; // set false for better image`, and refresh(x,y,w,h) only sends 0x91/0x92 `if (usePartialUpdateWindow)`, so 0x12 always refreshes the whole panel with the partial LUT. One caveat the researcher missed: header comment `useFastPartialUpdateFromOTP = true; // set this false for earlier batches, such as the panel I have (1580258us)` - on an older-batch panel a partial can take ~1.58 s, not 0.45 s.",
+    "sources": [
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/gdey/GxEPD2_750_GDEY075T7.h",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/gdey/GxEPD2_750_GDEY075T7.cpp",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_BW.h",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_EPD.cpp",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/main.cpp"
+    ]
+   }
+  },
+  {
+   "id": "F04-touch-logged-only-after-hittest",
+   "claim": "Validation blind spot. main.cpp:50-51 logs a touch only AFTER hitTest() succeeds. Only release events are reported at all. Suppose the GT911 axes are mirrored or swapped relative to the display, or its configured resolution is not 800x480. Board taps then map to x>=480 or to the wrong squares, and the firmware prints nothing. It would look like dead touch with no diagnostic. The right 320 px of the panel can never be validated.",
+   "evidence": "main.cpp:49-51: `if (!ui.hitTest(p.x, p.y, f, r)) return;` comes before `Serial.printf(\"[touch] ...\")`. gt911.cpp never reads the config block. goodix.c reads it (RESOLUTION_LOC=1, so 0x8048..0x804B hold X/Y max, and TRIGGER_LOC=6, so 0x804D). TAMC_GT911.h: GT911_X_OUTPUT_MAX_LOW 0x8048, GT911_Y_OUTPUT_MAX_LOW 0x804A, GT911_MODULE_SWITCH_1 0x804D. The factory config of the GDEY075T7-T01 touch is unknown until read on hardware.",
+   "sources": [
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/main.cpp",
+    "https://raw.githubusercontent.com/torvalds/linux/master/drivers/input/touchscreen/goodix.c",
+    "https://raw.githubusercontent.com/TAMCTec/gt911-arduino/main/TAMC_GT911.h"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Print raw x,y (and mapped x,y) BEFORE hitTest, on touch-down as well as release. At boot, read and print 0x8047 (config version), 0x8048-0x804B (X/Y max), 0x804C (touch count), 0x804D (INT trigger mode and X2Y/mirror bits) and the firmware version at 0x8144. Show the last raw coordinate in the side column.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As stated, except: a mirrored/swapped mapping that still lands inside 0..479 IS logged (as the wrong square); only results outside the board are silent. Also dump 0x8146-0x8149 (the read-only resolution the chip actually reports) alongside 0x8047-0x804D and 0x8144; 0x804D bits 7/6/3 tell directly whether the factory config mirrors Y, mirrors X or swaps axes.",
+    "reasoning": "main.cpp:47-51: tapped() (release-only) -> `if (!ui.hitTest(...)) return;` -> only then Serial.printf. Any coordinate with x>=480 or outside 0..479 is dropped silently, so a mirrored/swapped/mis-scaled touch panel looks dead and the right 320 px can never be validated. gt911.cpp never reads the config block. Register addresses verified against the Goodix GT911 Programming Guide (primary): 0x8047 Config_Version, 0x8048-0x804B X/Y Output Max, 0x804C Touch Number, 0x804D Module_Switch1 (bit7 Y2Y reversal, bit6 X2X reversal, bit3 X2Y swap, bits1:0 INT trigger 00 rising/01 falling/02 low/03 high), 0x8144-45 firmware version, 0x8146-49 x/y resolution (read-only mirror), 0x814E status, 0x814F track id, 0x8150.. x/y. goodix.c agrees (RESOLUTION_LOC 1, MAX_CONTACTS_LOC 5, TRIGGER_LOC 6). Side check: firmware's GT_POINT1=0x8150 with 6 bytes is correct (0x814F is the track id). Minor imprecision in the claim: taps that map to the WRONG SQUARE are printed (with the wrong square); only out-of-board results are silent.",
+    "sources": [
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/main.cpp",
+     "https://www.crystalfontz.com/controllers/GOODIX/GT911ProgrammingGuide/478/",
+     "https://raw.githubusercontent.com/torvalds/linux/master/drivers/input/touchscreen/goodix.c",
+     "https://raw.githubusercontent.com/TAMCTec/gt911-arduino/main/TAMC_GT911.h"
+    ]
+   }
+  },
+  {
+   "id": "F05-gt911-absent-no-fallback-log-flood",
+   "claim": "If begin() fails, which is likely on a first Dupont power-up or when the chip is at 0x14, setup only prints a hint (main.cpp:35). loop() keeps calling tapped() every 10 ms. Every failed poll makes Wire emit a log_e, and CORE_DEBUG_LEVEL=2 (WARN) keeps ERROR logs, so about 100 lines per second flood the console. The 0x14 fallback needs a recompile (config.h:21, README.md:25). 0x14 is a realistic outcome. GPIO43 idles HIGH as UART TX while the GT911 leaves power-on reset. If the firmware's own RST/INT sequence does not take effect (bad RST or INT wire), the chip stays at 0x14. The HIGH-selects-0x14 step is inference.",
+   "evidence": "Wire.cpp:445-467: endTransmission(false) only sets `nonStop = true` and returns 0. The check at gt911.cpp:27 can therefore never fail. Wire.cpp:~520-527: requestFrom then runs i2cWriteReadNonStop and on error calls `log_e(\"i2cWriteReadNonStop returned Error %d\", err)`. esp32-hal-log.h: ARDUHAL_LOG_LEVEL_ERROR=1, WARN=2. goodix.c: INT HIGH during reset selects 0x14 (0x28/0x29); LOW selects 0x5D. TAMC_GT911.h: GT911_ADDR1 0x5D, GT911_ADDR2 0x14.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src/Wire.cpp",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-log.h",
+    "https://raw.githubusercontent.com/torvalds/linux/master/drivers/input/touchscreen/goodix.c"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "In GT911::begin(), after the reset sequence, probe both addresses: `for (uint8_t a : {0x5D, 0x14}) { _w.beginTransmission(a); if (_w.endTransmission()==0) { _addr=a; break; } }`. Print which one answered. Finding 0x14 means the RST or INT wire is not doing its job. Keep an `_ok` flag. While it is false, read() returns immediately and begin() is retried every 2 s. Show TOUCH FAIL or OK on the e-ink side column.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As stated, but the flood is >=3 error lines per failed poll (Wire log_e + i2c-ng HAL log_e + IDF 'i2c.master ... I2C transaction failed'), i.e. several hundred lines/s attempted. The Arduino-level log_e lines go to UART0 via ets_printf and are likely invisible on USB-CDC unless Serial.setDebugOutput(true) is called; the IDF-level E lines reach USB through the secondary USB-Serial-JTAG console and are independent of CORE_DEBUG_LEVEL (silence with esp_log_level_set(\"i2c.master\", ESP_LOG_NONE) or, better, stop polling while _ok is false). Add Serial.setDebugOutput(true) in setup so all diagnostics land on the one port Fabrizio watches. Probe-both-addresses fix is correct; note a bare-address probe itself logs an error line per NACK on this core.",
+    "reasoning": "Local Wire.cpp L445-476: endTransmission(false) only sets nonStop=true, err stays ESP_OK, returns 0 -> the check at gt911.cpp:27 can never fail. requestFrom then runs i2cWriteReadNonStop and logs `log_e(\"i2cWriteReadNonStop returned Error %d\")` (L518-521). Core 3.3.8 on IDF 5.5.4 uses esp32-hal-i2c-ng.c (guard ESP_IDF_VERSION >= 5.4.0), which adds its own `log_e(\"i2c_master_transmit_receive failed: [%d] %s\")`, and the prebuilt IDF driver contains \"E (%lu) %s: %s(%d): I2C transaction failed\" (strings on libesp_driver_i2c.a; CONFIG_LOG_DEFAULT_LEVEL=1). So each failed poll emits >=3 error lines, not 1; loop() polls every 10 ms with no _ok gate and setup() (main.cpp:35) only prints a hint. esp32-hal-log.h: ARDUHAL_LOG_LEVEL=CORE_DEBUG_LEVEL=2 >= ERROR(1) so log_e is compiled in. Nuance the researcher missed: log_printf -> ets_printf goes to the ROM console = UART0 (CONFIG_ESP_CONSOLE_UART_NUM 0); Serial.setDebugOutput(true) is only called automatically when ARDUHAL_LOG_LEVEL >= DEBUG (chip-debug-report.cpp:292-296 via main.cpp:54), so at level 2 the Arduino log_e lines probably do NOT reach the USB-CDC monitor, whereas the IDF ESP_LOGE lines do (CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=1). Flood on USB is therefore real but comes from the IDF layer and is not silenced by lowering CORE_DEBUG_LEVEL. Address select verified in primary source: Goodix guide 4.1 'If the address is 0x28/0x29, host outputs high; if 0xBA/0xBB, host outputs low'; goodix.c same. 'GPIO43 idle-high at GT911 power-on => 0x14 if the RST/INT wires fail' remains a reasonable inference (depends on an RST pull-up on the FTS02, unverified).",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src/Wire.cpp",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-i2c-ng.c",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-log.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/chip-debug-report.cpp",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/qio_opi/include/sdkconfig.h",
+     "https://www.crystalfontz.com/controllers/GOODIX/GT911ProgrammingGuide/478/",
+     "https://raw.githubusercontent.com/torvalds/linux/master/drivers/input/touchscreen/goodix.c"
+    ]
+   }
+  },
+  {
+   "id": "F06-rotation-math-wrong",
+   "claim": "gt911.cpp:44 and :46 use the wrong dimension constant and the wrong source axis for rotations 1 and 3. Case 1 yields x'=799-y, in the range [320..799], for a 480-wide portrait screen. Case 3 yields y'=479-x, in the range [-320..479]. The defect is dormant in phase 1 (rotation 0; touch.setRotation() is never called), but the code is commented as the rotation support for the case. Case 2 is correct.",
+   "evidence": "GFX and GxEPD2 rotation 1 forward map: raw_x = WIDTH-1-ly, raw_y = lx. Its inverse is lx = raw_y, ly = 799-raw_x. Rotation 3 inverse is lx = 479-raw_y, ly = raw_x. Test raw (100,50): correct rot1 = (50,699), firmware gives (749,100). Correct rot3 = (429,100), firmware gives (50,379). Raw (799,479) under firmware rot3 gives y=-320. The pattern seems copied from TAMC_GT911 (`x = width - y; y = temp` and `x = y; y = height - temp`). That is only valid when width/height are the ROTATED dimensions.",
+   "sources": [
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp",
+    "https://raw.githubusercontent.com/TAMCTec/gt911-arduino/main/TAMC_GT911.cpp"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "`case 1: { int16_t t=x; x=y; y=EPD_W-1-t; break; }` and `case 3: { int16_t t=x; x=EPD_H-1-y; y=t; break; }`. Tie touch rotation to display.setRotation() in one place. Add optional mirrorX/mirrorY flags, because the panel's native origin is unknown until measured (see F04).",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "gt911.cpp:44/:46 are wrong for rotations 1 and 3: relative to the Adafruit-GFX/GxEPD2 convention the two cases are interchanged and each uses the other axis' dimension constant (case 1 yields x in 320..799, case 3 yields y in -320..479). Correct: case 1 x'=raw_y, y'=EPD_W-1-raw_x; case 3 x'=EPD_H-1-raw_y, y'=raw_x. Dormant in phase 1 (rotation 0), so impact is minor until the case is rotated; all of this additionally assumes the GT911 native axes coincide with display rotation 0, which is unknown until 0x804D/first taps are read (F04).",
+    "reasoning": "Derived the inverse from GxEPD2_BW::drawPixel myself: rot1 = swap then x=WIDTH-1-x => raw_x=799-ly, raw_y=lx => lx=raw_y, ly=799-raw_x. rot3 = swap then y=HEIGHT-1-y => raw_x=ly, raw_y=479-lx => lx=479-raw_y, ly=raw_x. Firmware gt911.cpp:44 case 1 gives x'=799-raw_y in [320..799] (must be 0..479); :46 case 3 gives y'=479-raw_x in [-320..479]. Test vectors reproduced: raw(100,50) -> correct rot1 (50,699) vs firmware (749,100); correct rot3 (429,100) vs firmware (50,379); raw(799,479) rot3 -> y=-320. More precisely than 'wrong source axis': firmware case 1 is the rot-3 formula with EPD_W where EPD_H belongs, and case 3 is the rot-1 formula with EPD_H where EPD_W belongs, i.e. the two cases are swapped relative to the GFX convention AND use the wrong constant. Case 2 correct. TAMC_GT911.cpp L100-113 has the same shape (x=width-y / y=height-temp), confirming the likely origin. Dormant: main.cpp uses setRotation(0) and never calls touch.setRotation(). Proposed replacement formulas match my derivation. Because it is dormant, practical impact today is minor, not major.",
+    "sources": [
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_BW.h",
+     "https://raw.githubusercontent.com/TAMCTec/gt911-arduino/main/TAMC_GT911.cpp"
+    ]
+   }
+  },
+  {
+   "id": "F07-int-on-gpio43-uart-tx-and-not-rtc",
+   "claim": "TP_INT on GPIO43 (D6) is a poor choice for two verified reasons. (1) GPIO43 is U0TXD. The ROM, the 2nd-stage bootloader and the IDF console drive it push-pull, idle HIGH with boot text, from reset until GT911::begin() runs pinMode. That is about 0.4-0.5 s, because of delay(300) plus display.init. Meanwhile the GT911 INT pin may be an output, so there is contention on every boot. (2) GPIO43/44 are not RTC GPIOs. ext0/ext1 deep-sleep wake from the touch INT is impossible, which hurts the roadmap phase-4 deep sleep. TP_RST on GPIO44 (U0RXD, an input with pull-up at boot) is harmless.",
+   "evidence": "variants/XIAO_ESP32S3_Plus/pins_arduino.h: `TX = 43; RX = 44; D6 = 43; D7 = 44; D9 = 8`. sdkconfig.h (esp32s3 qio_opi): `CONFIG_ESP_CONSOLE_UART_DEFAULT 1`, `CONFIG_ESP_CONSOLE_UART_NUM 0`. soc_caps.h: `SOC_RTCIO_PIN_COUNT 22`. rtc_io_channel.h has RTCIO_GPIO8_CHANNEL and no GPIO43 entry. The Seeed schematic labels the nets A6_D6_TX and A7_D7_RX. D9_MISO goes only to the breakout header, not to the display connector. The actual harm from the contention is inference. The driver strengths of the GT911 INT pin were not checked.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/qio_opi/include/sdkconfig.h",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/soc_caps.h",
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Nothing is wired yet, so swap TP_INT to D9/GPIO8. It is RTC-capable, has no boot-time activity, and is unused by the driver board. Move the buzzer to D6/GPIO43. It will emit a faint tick from the boot text; if that annoys, put a 1 k series resistor or drop the buzzer. Keep TP_RST on D7. Update config.h, docs/wiring.md and the README. Attach an ISR counter to INT and print it with every touch. Otherwise the INT wire is never validated in phase 1, and the reset sequence may appear to succeed without it.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As stated. Strengthened: the GT911 INT pin is documented as a driven output ('In standby mode, INT outputs low level'), so with TP_INT on GPIO43 there is a real push-pull conflict against idle-high U0TXD from reset until GT911::begin(); harm is unmeasured. GPIO43/44 are not RTC IOs (S3 RTC IOs are GPIO0-21), so touch-wake from deep sleep is impossible there. Swap TP_INT to D9/GPIO8 (RTC-capable, header-only net on the Seeed board) and change SPI.begin to pass MISO=-1; alternatively use a Plus back pad GPIO11/12/13 for INT and keep the buzzer on D9. Buzzer on GPIO43 will chirp with boot text.",
+    "reasoning": "Local variant XIAO_ESP32S3_Plus/pins_arduino.h: TX=43, RX=44, D6=43, D7=44, D9=8. sdkconfig.h: CONFIG_ESP_CONSOLE_UART_DEFAULT 1, UART_NUM 0, baud 115200 -> ROM, bootloader and IDF console drive GPIO43 push-pull from reset until GT911::begin() calls pinMode (after delay(300)+display.init). soc_caps.h SOC_RTCIO_PIN_COUNT 22; rtc_io_channel.h lists RTCIO_GPIO0..21 only -> GPIO43/44 cannot be ext0/ext1 deep-sleep wake sources; GPIO8 can. Seeed schematic (re-fetched, sha256 identical to cached copy): A6_D6_TX, A7_D7_RX, A9_D9_MISO go only to breakout headers CN1/CN2; CN3 display connector carries only BUSY/RST/DC/CS/SCK/MOSI. The contention is better supported than the researcher stated: Goodix Programming Guide sec.5 says for rising-edge mode 'In standby mode, INT outputs low level', i.e. INT is an actively driven output, while UART0 TX idles HIGH -> genuine output-vs-output conflict for ~0.5 s every boot (damage/harm still unquantified; drive strengths not checked). Guide sec.1 also requires the host INT to be floating when input (firmware's pinMode INPUT is right). Caveats on the proposed swap: (a) main.cpp:30 passes EPD_MISO=8 to SPI.begin; I checked esp32-hal-spi.c spiDetachBus_MISO - re-purposing GPIO8 later only detaches MISO and does NOT stop the bus (condition needs sck==-1 or miso&&mosi==-1), so it works, but SPI.begin(EPD_SCK,-1,EPD_MOSI,EPD_CS) is the clean form; (b) the Plus castellated back pads GPIO10-13 (D16-D19) are also RTC-capable, so INT could go there and the buzzer could stay on D9.",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/qio_opi/include/sdkconfig.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/soc_caps.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/soc/esp32s3/include/soc/rtc_io_channel.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.c",
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+     "https://www.crystalfontz.com/controllers/GOODIX/GT911ProgrammingGuide/478/"
+    ]
+   }
+  },
+  {
+   "id": "F08-panel-never-powered-off-after-partial",
+   "claim": "After any partial refresh, GxEPD2 leaves the panel's booster ON. The firmware never calls display.powerOff() or hibernate(). After the first tap, the panel stays powered indefinitely while the board sits idle. That is bad for a 4000 mAh battery device. It also runs against the usual e-paper vendor guidance not to keep the panel in the high-voltage state; that guidance is quoted from memory, not re-verified here. It skews timing too: a partial that follows a full refresh pays power-on and _Init_Part, while back-to-back partials do not.",
+   "evidence": "GxEPD2_BW::nextPage: the partial-window branch has no powerOff. Only the full-window branch ends with `epd2.powerOff();`. GxEPD2_750_GDEY075T7.cpp: `_PowerOff()` is not called at the end of _Update_Part. refresh(x,y,w,h) leaves power on. `_power_is_on` is cleared only in _PowerOff, which sends command 0x02. hibernate adds 0x07 with data 0xA5.",
+   "sources": [
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_BW.h",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/gdey/GxEPD2_750_GDEY075T7.cpp"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Call display.powerOff() after the last refresh of a move, or after 2-3 s idle, accepting about 140 ms of power-on at the next refresh. Use display.hibernate() before any MCU sleep; RST is wired, so wake works. In phase 1, measure move latency both with and without powerOff, so the trade-off is decided on data.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As stated; the vendor-guidance part is now verified (Good Display: deep sleep after refresh 'to prolong its lifespan') and GxEPD2's README documents 'partial update keeps power on' as intended behaviour. Cost of the fix per GxEPD2 constants: power_off_time 42 ms + power_on_time 140 ms + _InitDisplay per wake; hibernate additionally needs the RST pulse (wired, D0).",
+    "reasoning": "GxEPD2_BW::nextPage (master): the _using_partial_mode branch is writeImage / refresh(x,y,w,h) / writeImageAgain with no powerOff; only the full-update branches call epd2.powerOff(). Driver refresh(x,y,w,h) and _Update_Part never call _PowerOff; _power_is_on is cleared only in _PowerOff (cmd 0x02); hibernate = _PowerOff + 0x07/0xA5. GxEPD2 README changelog states it explicitly: 'fixed (added) powerOff() after full update (partial update keeps power on)'. Firmware has zero powerOff()/hibernate() calls (grep of main.cpp/board_ui.cpp), so after the first tap the booster stays on until the next 20th-move full refresh, and indefinitely if the user stops mid-count. Vendor guidance re-verified: good-display.com/news/171.html - 'it is common practice to put the e-paper display into deep sleep mode to prolong its lifespan'. GxEPD2's own example calls display.powerOff()/hibernate() after update sequences. Actual idle current with booster on was not found in a primary source.",
+    "sources": [
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_BW.h",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/gdey/GxEPD2_750_GDEY075T7.cpp",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/README.md",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/examples/GxEPD2_Example/GxEPD2_Example.ino",
+     "https://www.good-display.com/news/171.html"
+    ]
+   }
+  },
+  {
+   "id": "F09-no-battery-sense-on-driver-board",
+   "claim": "The Seeed driver-board schematic shows NO battery divider or ADC net. The battery goes through the power switch into an ETA9740E8A, a charger plus 5 V boost. Its OUT pin feeds VDD_5V, the XIAO 5V pin, so the XIAO BAT pads are not used. Every ADC-capable XIAO header pin (D0-D5, D8-D10) is already taken by display, I2C, SPI and buzzer/INT. D6/D7 (GPIO43/44) have no ADC. A battery-voltage print in phase 1, and the phase-4 battery gauge, are impossible without extra hardware. The same schematic shows RST going straight from D0 to the FPC with no RC or 'clever reset' circuit. MISO is not connected to the display.",
+   "evidence": "Schematic 'ePAPER' Rev 1.0, seeedstudio, 2024-12-09. U1 is ETA9740E8A: BAT pin 6 to BAT_4V2 via CN6 MSK12CO2 'Power switch', OUT pin 7 to VDD_5V, ISET R5 360K, 'Charging current = 0.5A', note 'BAT: 4.2V 1000mAH'. CN_DISPLAY carries only A2_D2_BUSY, A0_D0_RST, A3_D3_DC, A1_D1_CS, A8_D8_SCK, A10_D10_MOSI. H1/H2 are DNP pads on BAT_4V2 and GND. The Plus variant defines `ADC_BAT = 10` and `#define BAT_VOLT_PIN ADC_BAT` (GPIO10 = D16, a back pad).",
+   "sources": [
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+    "/Users/fabriziodrago/.claude/projects/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/tool-results/webfetch-1790015330598-pu6i74.pdf",
+    "https://wiki.seeedstudio.com/xiao_eink_expansion_board_v2/",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": true,
+   "recommended_action": "Plan a 2-resistor divider from the H1 pad (BAT_4V2) to an ADC-capable pin, e.g. 2x 220k plus 100 nF. The realistic target is the Plus back pad GPIO10 (soldering required). Otherwise free a header ADC pin, for instance by dropping the buzzer. Read it with analogReadMilliVolts(). Check ETA9740 light-load behaviour before relying on deep sleep (see unknowns). Remove the '2 ms clever reset' assumption (F16).",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As stated. Additions: the XIAO ESP32S3 Plus itself has no battery divider on GPIO10/ADC_BAT (pad only), so the external 2-resistor divider from H1 (BAT_4V2) to the GPIO10 back pad is the right plan and will not fight on-board parts; H1 is upstream of the power switch, so the divider is a permanent ~10 uA drain (acceptable on 4000 mAh, or use 1 Mohm-class values + 100 nF). ETA9740 datasheet shows 80 uA boost quiescent current and documents no light-load cut-off, which is encouraging for deep sleep but must still be measured. The switch also isolates the charger from the battery, so charging only works with the switch ON (read from schematic; untested).",
+    "reasoning": "Re-fetched the Seeed schematic (byte-identical to the cached PDF, sha256 d3d039ef...) and read it: title 'ePAPER' Rev 1.0 seeedstudio 2024-12-09; U1 ETA9740E8A OUT(7)->VDD_5V, BAT(6) behind CN6 MSK12CO2 'Power switch' from BAT_4V2, ISET R5 360K_1%, notes 'Charging current = 0.5A' and 'BAT: 4.2V 1000mAH'; H1/H2 DNP on BAT_4V2/GND; no resistor divider and no ADC net anywhere; CN3 pins 9-14 = BUSY, RST, DC, CS, SCK, MOSI wired straight to the XIAO nets (no RC / reset circuit, no MISO). The wiki page for the V2 board links this same PDF and documents no battery-sense feature; SKU 114993558 is sold as 'ePaper Driver Board for XIAO V2' with ETA9740. ADC: ESP32-S3 ADC pins are GPIO1-20, so D6/D7 (43/44) have none, and D0-D5, D8-D10 are all allocated. I also checked the XIAO ESP32S3 Plus schematic v1.1: net IO10/XMCLK/ADC_BAT goes only to castellated pad 20 and the B2B connector - there is NO on-board divider despite the wiki text 'Read the BAT voltage value', so GPIO10 is free for an external divider and nothing on the XIAO measures the battery either (its VBAT net is not even connected to the pack in this build). Extra facts for the 'unknowns': ETA9740 datasheet lists boost-mode 'Quiescent Current At BATT 80 uA' and no light-load auto-shutdown feature; H1 sits on the battery side of the switch, so a 2x220k divider draws ~9.5 uA even when switched off.",
+    "sources": [
+     "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf",
+     "https://wiki.seeedstudio.com/xiao_eink_expansion_board_v2/",
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf",
+     "https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/",
+     "https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1124/A090-V11_ETA9740.pdf",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/variants/XIAO_ESP32S3_Plus/pins_arduino.h"
+    ]
+   }
+  },
+  {
+   "id": "F10-board-id-and-flash-header",
+   "claim": "platformio.ini:5 uses `seeed_xiao_esp32s3` (8MB) for a Plus (16MB) together with `default_16MB.csv` (line 10). It still boots after a normal serial upload, but only because upload passes `--flash-size detect` and esptool patches the bootloader header. The bootloader and app images are BUILT with an 8MB header. A merged or factory .bin for a MakerWorld or web-flasher release would carry 8MB while the partition table reaches 0xFF0000. The expected result (known IDF behaviour, not verified in this review) is a 'partition ... exceeds flash chip size' boot failure. The non-Plus variant also lacks D11-D19, ADC_BAT/BAT_VOLT_PIN, TX1/RX1 and `ARDUINO_XIAO_ESP32S3_PLUS`. Line 9 (memory_type) and lines 12-13 (-DBOARD_HAS_PSRAM, -DARDUINO_USB_CDC_ON_BOOT=1) duplicate the board JSON with identical values. They are harmless, and no redefinition warning is expected because GCC warns only when values differ; this was not compiled. docs/wiring.md:35 mentions back pads 'GPIO 47, 48, 38'. The Plus variant exposes 38,39,40,41,42,10,13,12,11 and no 47/48.",
+   "evidence": "seeed_xiao_esp32_s3_plus.json: `\"flash_size\": \"16MB\"`, `\"maximum_size\": 16777216`, `\"variant\": \"XIAO_ESP32S3_Plus\"`, `-DARDUINO_XIAO_ESP32S3_PLUS`. Its `\"partitions\"` is STILL `default_8MB.csv`. seeed_xiao_esp32s3.json: `\"flash_size\": \"8MB\"`. builder/main.py:905-906: elf2image uses `--flash-size board.get(\"upload.flash_size\")`. pioarduino-build.py:108-109 does the same for bootloader.bin. main.py:~1782 upload flags are `\"--flash-size\", \"detect\"`. gen_esp32part is called without --flash-size, so there is no build-time check. default_16MB.csv: app1 at 0x650000 size 0x640000, spiffs 0xc90000, coredump 0xFF0000. Plus pins_arduino.h: D11..D19 = 38,39,40,41,42,10,13,12,11.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32_s3_plus.json",
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32s3.json",
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/builder/main.py",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/tools/pioarduino-build.py",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/tools/partitions/default_16MB.csv"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": true,
+   "recommended_action": "`board = seeed_xiao_esp32_s3_plus`. KEEP `board_build.partitions = default_16MB.csv`, because the Plus JSON still defaults to the 8MB table. Delete lines 9, 12 and 13. Keep `-DCORE_DEBUG_LEVEL=2`. Add `monitor_filters = esp32_exception_decoder, time`. Fix the wiring.md pad list. upload_speed=921600 is moot over USB-Serial-JTAG (inference); leave it or drop it.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As stated; the boot-failure mechanism is verified in IDF source (bootloader esp_partition_table_verify rejects any partition ending beyond the header's flash size). It bites any distribution path that does not rewrite the header: the platform's own firmware.factory.bin is merged with --flash-size 8MB, and web flashers that keep the header as-is will brick-loop; plain `pio run -t upload` works only because of `--flash-size detect`. GPIO47/48 exist on the Plus only on the B2B connector, not as solderable pads.",
+    "reasoning": "platformio.ini L5 `board = seeed_xiao_esp32s3`, L10 default_16MB.csv. Local board JSONs: seeed_xiao_esp32s3.json flash_size 8MB / maximum_size 8388608 / variant XIAO_ESP32S3; seeed_xiao_esp32_s3_plus.json flash_size 16MB / 16777216 / variant XIAO_ESP32S3_Plus / -DARDUINO_XIAO_ESP32S3_PLUS, but partitions still default_8MB.csv - so the override on L10 must stay. Both JSONs already carry -DBOARD_HAS_PSRAM, -DARDUINO_USB_CDC_ON_BOOT=1 and memory_type qio_opi -> L9/12/13 are redundant. builder/main.py L905-906 elf2image `--flash-size board.get(\"upload.flash_size\")`; pioarduino-build.py L108-109 same for the bootloader; upload flags L1782-1783 `--flash-size detect`; factory merge-bin L1625/1636 uses the board flash_size (8MB). gen_esp32part is invoked as `-q $SOURCE $TARGET` with no --flash-size (pioarduino-build.py L251). default_16MB.csv: app1 0x650000+0x640000, spiffs 0xc90000, coredump 0xFF0000 - all beyond 8 MB. The 'known IDF behaviour' is now verified: bootloader_utility.c calls esp_partition_table_verify(partitions, true, ...) and flash_partitions.c returns ESP_ERR_INVALID_SIZE with 'partition %d invalid - offset ... exceeds flash chip size' when offset+size > chip_size (taken from the image header) -> 'Failed to verify partition table', no boot. Non-Plus variant header has no D11-D19, ADC_BAT/BAT_VOLT_PIN, TX1/RX1 (grep). wiring.md:35 'GPIO 47, 48, 38': Plus schematic shows IO47/IO48 only on the 30-pin B2B connector J3, not on solder pads; castellated back pads are 38,39,40,41,42,10,13,12,11.",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32_s3_plus.json",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32s3.json",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/builder/main.py",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/tools/pioarduino-build.py",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/tools/partitions/default_16MB.csv",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5.1/components/bootloader_support/src/flash_partitions.c",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5.1/components/bootloader_support/src/bootloader_utility.c",
+     "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/XIAO_ESP32S3_Plus_V1.1_SCH_260115.pdf"
+    ]
+   }
+  },
+  {
+   "id": "F11-platform-not-pinned",
+   "claim": "`platform = espressif32` (platformio.ini:4) resolves to pioarduino 55.03.38 / core 3.3.8 only on Fabrizio's machine, because that is what is installed under that name. On a stock PlatformIO install, the path the README gives to MakerWorld users, it resolves to the official platformio/espressif32 6.x with Arduino core 2.0.x. That is a different core from the one being validated. The official platform also has no `seeed_xiao_esp32_s3_plus` board, so the F10 fix would fail there with an unknown-board error.",
+   "evidence": "Local platform.json: repository `https://github.com/pioarduino/platform-espressif32.git`, version 55.03.38, framework `esp32-core-3.3.8.tar.xz`, IDF v5.5.4. raw.githubusercontent.com/platformio/platform-espressif32/develop/boards/seeed_xiao_esp32_s3_plus.json returns HTTP 404, while seeed_xiao_esp32s3.json exists there. The pioarduino release page 55.03.38 exists ('Arduino Release v3.3.8 based on ESP-IDF v5.5.4'). Its asset list did not load, so the exact zip URL is unverified.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/platform.json",
+    "https://raw.githubusercontent.com/platformio/platform-espressif32/develop/boards/seeed_xiao_esp32_s3_plus.json",
+    "https://github.com/pioarduino/platform-espressif32/releases/tag/55.03.38"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": true,
+   "recommended_action": "Pin the platform by URL. The usual pioarduino pattern is `platform = https://github.com/pioarduino/platform-espressif32/releases/download/55.03.38/platform-espressif32.zip`; confirm the asset name on the release page. For the release, pin the library to an exact version, `zinggjm/GxEPD2 @ 1.6.9`, so refresh timings stay reproducible.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "`platform = espressif32` resolves to pioarduino 55.03.38 (Arduino core 3.3.8 / IDF 5.5.4) only on Fabrizio's machine. On a stock PlatformIO install it resolves to official platformio/espressif32 7.1.3, which still ships Arduino core 2.0.17 and has no seeed_xiao_esp32_s3_plus board. Pin exactly what is installed: `platform = https://github.com/pioarduino/platform-espressif32/releases/download/55.03.38-1/platform-espressif32.zip` (verified HTTP 200; the plain 55.03.38 tag also exists). Pin `zinggjm/GxEPD2 @ 1.6.9` for the release.",
+    "reasoning": "Local platform.json: name espressif32, version 55.03.38, repository pioarduino/platform-espressif32, framework esp32-core-3.3.8; .piopm shows it was installed from `.../releases/download/55.03.38-1/platform-espressif32.zip`. `platform = espressif32` on a clean machine resolves to the PlatformIO registry package platformio/espressif32. Correction: that is now 7.1.3 (registry API), not 6.x - but its platform.json still pins framework-arduinoespressif32 ~4.20017.0, i.e. Arduino core 2.0.17, so the substance (a different, much older core than the one validated) holds. seeed_xiao_esp32_s3_plus.json returns 404 on both develop and master of platformio/platform-espressif32 while seeed_xiao_esp32s3.json returns 200 -> the F10 board fix would fail there with unknown board. The URL the researcher could not verify IS valid: GitHub API lists releases 55.03.38 and 55.03.38-1 (both 'Arduino Release v3.3.8 based on ESP-IDF v5.5.4'), each with asset platform-espressif32.zip, and both download URLs return HTTP 200. Newer releases exist (55.03.39, 55.03.311, 55.03.312). GxEPD2 1.6.9 is the current registry version (library.properties and registry API), so `zinggjm/GxEPD2 @ 1.6.9` is a valid exact pin.",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/platform.json",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/.piopm",
+     "https://api.registry.platformio.org/v3/packages/platformio/platform/espressif32",
+     "https://raw.githubusercontent.com/platformio/platform-espressif32/v7.1.3/platform.json",
+     "https://raw.githubusercontent.com/platformio/platform-espressif32/develop/boards/seeed_xiao_esp32_s3_plus.json",
+     "https://api.github.com/repos/pioarduino/platform-espressif32/releases",
+     "https://github.com/pioarduino/platform-espressif32/releases/download/55.03.38-1/platform-espressif32.zip",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/library.properties"
+    ]
+   }
+  },
+  {
+   "id": "F12-gt911-read-ignores-i2c-error",
+   "claim": "gt911.cpp:40 ignores the return value of `readRegs(GT_POINT1, d, 6)`. `d[6]` is uninitialised (gt911.cpp:39). An I2C glitch, plausible on Dupont wires at 400 kHz, turns stack garbage into a touch coordinate. The status is then acknowledged (gt911.cpp:52), so the bad frame is consumed as a real 'down'.",
+   "evidence": "gt911.cpp:39-42: `uint8_t d[6]; readRegs(GT_POINT1, d, 6); int16_t x = d[0] | (d[1] << 8);`. int16_t itself is fine. Legitimate values are at most 799. Garbage of 0x8000 or more goes negative, and hitTest rejects it (board_ui.cpp:16). Garbage in 0..479 becomes a false tap.",
+   "sources": [
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": true,
+   "recommended_action": "Write `uint8_t d[6] = {0}; if (!readRegs(GT_POINT1, d, 6)) return false;`. Do not ack on a failed read, so the frame is re-read at the next poll. Reject x>=EPD_W or y>=EPD_H. Count and print I2C errors; the count is a useful wiring-quality metric in phase 1.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As stated. The more likely practical symptom of the bug is a LOST tap (failed coordinate read is acked and the down-frame discarded, or garbage lands outside 0..479 and is rejected) rather than a phantom move; both disappear with `if (!readRegs(...)) return false;` before the ack plus a range check.",
+    "reasoning": "gt911.cpp:39-42 verbatim: `uint8_t d[6]; readRegs(GT_POINT1, d, 6); int16_t x = d[0] | (d[1] << 8); int16_t y = d[2] | (d[3] << 8);` - return value discarded, d uninitialised, readRegs writes buf only on success (L28-30). L52 then unconditionally writes 0 to 0x814E, consuming the frame, and tapped() stores the garbage as _last and will report it on the next release frame. hitTest (board_ui.cpp:16) rejects negatives and >=480, so a false tap needs both garbage words in 0..479 - low probability but non-zero, and the ack-after-failed-read also silently drops a genuine touch-down. Per the Goodix guide the chip holds the frame until 0x814E is cleared, so NOT acking on failure does give a clean retry, as the fix assumes.",
+    "sources": [
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/board_ui.cpp",
+     "https://www.crystalfontz.com/controllers/GOODIX/GT911ProgrammingGuide/478/"
+    ]
+   }
+  },
+  {
+   "id": "F13-stale-taps-after-blocking-refresh",
+   "claim": "The GT911 is not polled during the 0.45-2 s blocking refreshes. A tap made while the screen is updating, which impatient users do on e-ink, is still pending when polling resumes (buffer-status set). The down frame and then the release frame are consumed, so tapped() fires for a tap the user made against the OLD screen. Typical symptom: select plus immediate deselect, or an unintended move.",
+   "evidence": "gt911.cpp:33-54 acks only when polled. The main.cpp loop blocks inside ui.drawSquare/drawStatus/drawFull. goodix.c writes 0 to GOODIX_READ_COOR_ADDR after every report, and the buffer-status bit is BIT(7). The GT911 holds 'data ready' until the host clears it. Whether it freezes or overwrites the coordinates meanwhile was not verified. GxEPD2_EPD.h exposes `setBusyCallback(void (*)(const void*), const void*)`. _waitWhileBusy calls it in place of delay(1).",
+   "sources": [
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_EPD.h",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_EPD.cpp",
+    "https://raw.githubusercontent.com/torvalds/linux/master/drivers/input/touchscreen/goodix.c"
+   ],
+   "confidence": "medium",
+   "impact": "minor",
+   "contradicts_plan": true,
+   "recommended_action": "Add `GT911::flush()`. It loops up to about 5 times: read 0x814E, stop if bit7 is clear, write 0, delay 12 ms. Then it sets `_wasDown=false`. Call it after every refresh. Alternatively, drain from a GxEPD2 busy callback: `display.epd2.setBusyCallback(...)`. Consider acting on touch-DOWN instead of release; it saves the finger-lift time on top of 450 ms refreshes.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Confirmed and no longer conditional: per the Goodix programming guide the GT911 does not update coordinates while 0x814E is un-acked, so exactly one stale touch-down (first contact made during the refresh) is delivered when polling resumes, followed by its release -> tapped() fires for a tap aimed at the old screen. flush() after every refresh is the right fix, with one refinement: after flushing, also require a no-touch state before arming (if the finger is still down at flush time, setting _wasDown=false alone lets the ongoing press turn into a tap on release). If a busy callback is used instead, it must contain its own delay(1)/yield because GxEPD2 calls it INSTEAD of delay(1).",
+    "reasoning": "The one thing the researcher could not verify is answered by the primary source, in favour of the finding. Goodix GT911 Programming Guide sec.5: '3. ... The host is supposed to finish the reading within one cycle and reset buffer status (0x814E) to 0. 4. ... if the host fails to finish reading coordinates within one cycle, GT911 will output one INT pulse again instead of update coordinates even if it detects that the coordinate is updated. 5. If the host still fails to read coordinate, GT911 will keep outputting INT pulse.' So the chip FREEZES the first unread frame. A tap made during a blocking refresh therefore leaves status=0x80|1 with the OLD-screen coordinates pending; on the first poll after the refresh gt911.cpp reads it as down and acks, the next scan reports release (0x80|0), and tapped() fires -> select/deselect or an unintended move. main.cpp blocks inside drawSquare x2 + drawStatus (+ drawFull every 20th move, >1.2 s) with no polling. GxEPD2_EPD.h L96 setBusyCallback exists and _waitWhileBusy calls it in place of delay(1); epd2 is a public member of GxEPD2_BW (L240), so display.epd2.setBusyCallback(...) compiles. Note the callback replaces the delay, so it must itself delay/yield.",
+    "sources": [
+     "https://www.crystalfontz.com/controllers/GOODIX/GT911ProgrammingGuide/478/",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/main.cpp",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_EPD.h",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_EPD.cpp",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_BW.h"
+    ]
+   }
+  },
+  {
+   "id": "F14-gt911-registers-status-reset-verified",
+   "claim": "Register map and decoding are CORRECT. 0x8140 is the product ID ('911'). 0x814E is status: bit7 buffer ready, bit6 large detect, bit5 proximity, bit4 key, low nibble touch count. Point 1 starts at 0x814F with the track id. X low is at 0x8150, so the 6-byte read decodes xL,xH,yL,yH,sizeL,sizeH correctly. Release handling is right: a frame with 0x80 and count 0 produces the tap. Acking with a write of 0 is right. The reset sequence meets the datasheet except for T2, which is exactly at the limit. Two gaps remain. Bit6 (palm) and count>1 are ignored. A resting hand plus a finger reports 'point 1', which may be the palm, so the wrong square is chosen.",
+   "evidence": "TAMC_GT911.h: `GT911_PRODUCT_ID 0x8140`, `GT911_POINT_INFO 0x814E`, `GT911_POINT_1 0x814F`. TAMC_GT911.cpp readPoint: `id=data[0]; x=data[1]+(data[2]<<8); y=data[3]+(data[4]<<8)`. Status bits: `pointInfo >> 7 & 1`, `>> 6 & 1` (isLargeDetect), `& 0xF`. goodix.c timings: `msleep(20); /* T2: > 10ms */`, `usleep_range(100, 2000); /* T3: > 100us */`, `usleep_range(6000, 10000); /* T4: > 5ms */`, `msleep(50); /* T5: 50ms */`. Firmware gt911.cpp:11-14: INT=0 and RST=0 for delay(10) (T2 exactly 10 ms, not more than 10). RST=1 then delay(60) with INT still low covers T4+T5=55 ms with 5 ms margin. INT goes to INPUT, then delay(50). Good Display product page: 'capacitive touch panel-GT911, supports 5-point touch ... I2C'.",
+   "sources": [
+    "https://raw.githubusercontent.com/TAMCTec/gt911-arduino/main/TAMC_GT911.h",
+    "https://raw.githubusercontent.com/TAMCTec/gt911-arduino/main/TAMC_GT911.cpp",
+    "https://raw.githubusercontent.com/torvalds/linux/master/drivers/input/touchscreen/goodix.c",
+    "https://www.good-display.com/product/483.html"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "gt911.cpp:11: change delay(10) to delay(20). Optionally split the 60 ms into delay(10) (T4) plus delay(55). In read(): if `(st & 0x40) || n > 1`, cancel the gesture by setting `_wasDown=false`, ignore frames until release, then ack. A chessboard lying flat will see palms. Polling at 100 Hz is fine for phase 1: about 4 bytes per poll, and the GT911 reports at about 100 Hz. Move to INT-driven reads when sleep is introduced."
+  },
+  {
+   "id": "F15-dither-is-12.5-percent",
+   "claim": "Item (d). `x + ((yy - y) & 2 ? 0 : 2)` parses as `((yy-y)&2) ? 0 : 2`. Only even rows are drawn, one pixel in four, with the offset alternating 2/0 every other drawn row. The pattern is a quincunx of ISOLATED single pixels. Exactly 450 of 3600 pixels are black, which is 12.5 %. On a 0.2 mm-pitch e-paper, and especially under the fast partial LUT, isolated dots render weaker than nominal. Dark squares may be hard to tell from light ones. That is a risk to check on hardware, not a certainty.",
+   "evidence": "Simulated board_ui.cpp:28-30: rows 0,4,8.. have pixels at x=2,6,10... Rows 2,6,.. have x=0,4,8... Odd rows are empty. The count is 450/3600 = 12.5 %. The pattern is also what makes the F01 stripes faint today. A denser dither would make them obvious.",
+   "sources": [
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/board_ui.cpp"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Make the pattern a compile-time or run-time choice. Add a phase-1 test card in the side column with patches at 12.5, 25, 37.5 and 50 %, plus a diagonal hatch, each with a piece disc on top. Fabrizio then picks by eye on the real panel, after both a full and a partial refresh."
+  },
+  {
+   "id": "F16-chess-logic-text-centring-init-args",
+   "claim": "Verified OK. (e) `((file+rank)&1)==0` gives a1 dark and h1 light. (f) The start string is exactly 64 chars. Rank index 0 = 'RNBQKBNR' (Q on d1, K on e1), rank 1 = white pawns, ranks 7/8 = black. Uppercase means white. (c) The getTextBounds centring is right for baseline glyphs. With by=-33 and bh=34 the glyph spans cy-16..cy+17. 'Q' sits about 2 px low. The 24pt glyphs are too big for the r=22 disc, though. The N, R and K corners lie 22.0-22.7 px from the centre and merge with the ring at r=21-22. display.init(115200,true,2,false): the 2 ms pulse is GxEPD2's recipe for Waveshare 'clever reset' boards. The Seeed schematic has RST wired straight through, so the default 10 ms is the natural value. The diag bitrate's second Serial.begin on HWCDC is harmless, because begin() guards its allocations.",
+   "evidence": "FreeSansBold24pt7b glyph entries {offset,width,height,xAdvance,xOffset,yOffset}: 'N' {3906,28,34,35,4,-33}, 'K' {3667,30,34,34,4,-33}, 'R' {4438,28,34,34,4,-33}, 'Q' {4285,33,37,37,2,-34}. sqrt(14^2+17^2)=22.0, sqrt(15^2+17^2)=22.7. GxEPD2_EPD.cpp: `init(serial_diag_bitrate) { init(serial_diag_bitrate, true, 10, false); }`. _reset: `digitalWrite(_rst, LOW); delay(_reset_duration); digitalWrite(_rst, HIGH); delay(_reset_duration > 10 ? _reset_duration : 10);`. Python check of the start string: len 64, d1=Q, e1=K, d8=q, e8=k.",
+   "sources": [
+    "https://raw.githubusercontent.com/adafruit/Adafruit-GFX-Library/master/Fonts/FreeSansBold24pt7b.h",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_EPD.cpp",
+    "https://files.seeedstudio.com/wiki/xiao_075inch_epaper_panel/ePaper_Driver_Board.pdf"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Use FreeSansBold18pt7b for the letters. For vertical centring use `cy - by - bh/2`, which is exact for every glyph including Q. Change init to `display.init(115200, true, 10, false)`."
+  },
+  {
+   "id": "F17-spi-miso-tone-serial-format-counter",
+   "claim": "Item 4 checks. (1) `SPI.begin(SCK, MISO=8, MOSI, CS)` followed by tone() on GPIO8 is SAFE on 3.3.8. LEDC attach clears only the MISO pin, and the bus keeps running because SCK and MOSI stay attached. `pinMode(BUZZER_PIN, OUTPUT)` at main.cpp:29 is undone by spiAttachMISO's pinMode(INPUT). GxEPD2's later `SPI.begin()` is a no-op, so the custom pins survive. (2) tone() is non-blocking: it uses a queue and a task. (3) `%lu` is correct, because uint32_t is `unsigned long` on Xtensa under IDF 5. (4) `partialCount` counts MOVES, which is about 4 partial refreshes each. Selects and deselects are not counted. The comment at main.cpp:79 says 'Ogni 20 partial refresh', while README.md:30 says '20 mosse'. (5) Boot log: HWCDC writes are non-blocking when no host is attached, and the 256-byte TX ring keeps the LATEST data. The roughly 165-byte boot log usually survives until the monitor attaches. delay(300) is neither needed nor sufficient.",
+   "evidence": "esp32-hal-spi.c:244-252: spiDetachBus_MISO calls spiDetachMISO and then spiDetachBus. That function stops the bus only `else if (spi->sck == -1 || (spi->miso == -1 && spi->mosi == -1))`. The 3.0.0 tag has the same logic. SPI.cpp:66-69: `if (_spi) { return true; }`. Line 121: `if (_miso >= 0 && !spiAttachMISO(...))`, so -1 is supported. esp32-hal-ledc.c:210: `perimanClearPinBus(pin)`. Tone.cpp uses xQueueSend to tone_task. IDF 5.0 GCC migration guide: 'int32_t and uint32_t ... changed from the previous int and unsigned int to long and unsigned long respectively for the Xtensa compiler'. HWCDC.cpp:433-435: `if (!isCDC_Connected()) { // just pop/push RingBuffer and apply FIFO policy flushTXBuffer(buffer, size);`. setTxBufferSize(256). `operator bool()` returns isCDC_Connected().",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-spi.c",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/SPI/src/SPI.cpp",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/HWCDC.cpp",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/Tone.cpp",
+    "https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/migration-guides/release-5.x/5.0/gcc.html",
+    "https://raw.githubusercontent.com/espressif/arduino-esp32/3.0.0/cores/esp32/esp32-hal-spi.c"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "`SPI.begin(EPD_SCK, -1, EPD_MOSI, -1);`. The schematic shows no MISO to the display. Drop EPD_MISO and the pinMode at main.cpp:29. Replace delay(300) with `for (uint32_t t=millis(); !Serial && millis()-t < 2000;) delay(10);` behind a debug macro, and mirror the key diagnostics on the e-ink side column. Rename the counter to moveCount, or count real partial refreshes inside BoardUI. Make the threshold a config constant to tune by eye."
+  },
+  {
+   "id": "F18-libdeps-i2c-speed-misc",
+   "claim": "lib_deps resolve fine. `zinggjm/GxEPD2 @ ^1.6.2` installs 1.6.9, the registry latest, dated 2026-04-19. The class GxEPD2_750_GDEY075T7 is already present in tag 1.6.2. GxEPD2 depends on 'Adafruit GFX Library', which brings in Adafruit BusIO transitively via GFX's own manifest. That last step was not re-fetched here. main.cpp includes Wire.h and SPI.h, so LDF chain mode is enough. `Wire.begin(5, 6, 400000)` matches the 3.3.8 signature. The core enables only the roughly 45 k internal pull-ups. 400 kHz over about 20 cm of Dupont wire plus an FPC adapter is marginal unless the FTS02 carries its own pull-ups, which is unknown. The project root contains a junk directory literally named `{src,docs}`, the result of a failed brace expansion. It would ship in the repo or zip.",
+   "evidence": "PlatformIO registry API lists versions 1.6.9 (2026-04-19), 1.6.8, 1.6.7, 1.6.6, 1.6.5, 1.6.4, 1.6.2 (2025-01-14). Its dependency is Adafruit GFX Library. GxEPD2 library.properties: `depends: Adafruit GFX Library`, version 1.6.9. GxEPD2_BW.h at tag 1.6.2: `#if __has_include(\"gdey/GxEPD2_750_GDEY075T7.h\") #include ...`. Wire.h:121: `bool begin(int sda, int scl, uint32_t frequency = 0);`. esp32-hal-i2c-ng.c:131: `bus_config.flags.enable_internal_pullup = 1;`. `ls` of FW shows `drwxr-xr-x {src,docs}` as an empty directory.",
+   "sources": [
+    "https://api.registry.platformio.org/v3/packages/zinggjm/library/GxEPD2",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/library.properties",
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/1.6.2/src/GxEPD2_BW.h",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src/Wire.h",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-i2c-ng.c"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Start at 100 kHz for the first power-up. Try 400 kHz once the I2C error counter from F12 stays at 0. If the FTS02 has no pull-ups, add 4.7 k to 3V3 on SDA and SCL. Delete the `{src,docs}` directory before publishing."
+  },
+  {
+   "id": "F19-validation-tool-additions",
+   "claim": "Five small additions, about 80-120 lines in total, would turn phase 1 into a real hardware-validation tool. Today it is a demo that can 'pass' with broken INT or RST wires, mirrored touch, or a BUSY line that never reaches the MCU.",
+   "evidence": "Gaps found in this review: the INT line is never read (gt911.cpp:13 only sets INPUT). RST effectiveness is never checked, so begin() succeeds even if RST is open, because the chip self-starts. GxEPD2 only prints 'Busy Timeout!' after `_busy_timeout` = 10,000,000 us and returns no status. If BUSY were floating HIGH, refreshes would 'complete' in about 1 ms. Touch is reported only post-hitTest (F04). There is no address probe (F05).",
+   "sources": [
+    "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/src/GxEPD2_EPD.cpp",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/main.cpp",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/src/gt911.cpp"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "(1) Boot self-test, printed to Serial AND drawn in the side column. Run an I2C scan over 0x08-0x77 listing every ACK, and show the GT911 address actually used. Show the product id, the fw version at 0x8144 and the configured X/Y max at 0x8048-0x804B. Probe the address while RST is held LOW: it must NACK, which proves the RST wire. Show ESP.getFlashChipSize() and getPsramSize(). (2) Touch crosshair: on every touch-down, print raw and mapped x,y and the INT ISR edge count. Draw a 9-px crosshair with a partial refresh. Add a 4-corner-target mode to detect mirror, swap or scale. (3) Refresh telemetry: measure paint, transfer-plus-refresh and total ms around each firstPage..nextPage. Keep the GxEPD2 diag lines. Flag 'BUSY suspect' if a full refresh takes <300 ms or >9.5 s. Check that digitalRead(EPD_BUSY)==HIGH when idle before the first refresh. (4) Side-column touch buttons: 'FULL' forces a full refresh. 'MODE' cycles per-square, bounding-box and full-screen partial. A live counter shows partials since the last full, so ghosting thresholds can be judged by eye. (5) Battery print via analogReadMilliVolts() once a divider exists (F09). Until then, print 'no battery sense on this board' so nobody trusts a floating ADC value."
+  }
+ ],
+ "unknowns": [
+  "The FTS02 adapter was not examined in this thread. Open points: does it have I2C pull-ups, does it pull up RST or INT, does it shift levels, and does its header actually expose TP_INT and TP_RST.",
+  "The GT911 factory config on the GDEY075T7-T01 can only be read on hardware. That covers the configured X/Y max (800x480?), axis origin, mirror, X2Y swap and INT trigger mode. The raw-to-screen mapping is therefore unverified.",
+  "I could not quote the Goodix programming guide on whether the GT911 freezes or keeps overwriting the coordinate buffer while buffer-status (0x814E bit7) is not cleared. This affects which stale tap is replayed (F13), not whether one is.",
+  "Whether refresh time is truly independent of window area on this panel with GxEPD2's partial LUT is inferred from how EPD controllers work. Phase 1 should measure it.",
+  "The exact pioarduino 55.03.38 release-asset URL for pinning `platform =` is unconfirmed. The release page exists but its asset list failed to load.",
+  "ETA9740E8A behaviour at light load was not checked. Open points: does the 5 V boost shut down automatically below some tens of mA (it is a power-bank IC), and what is its quiescent current. Both are critical for phase-4 deep sleep. The schematic note says 'BAT 4.2V 1000mAH' and 0.5 A charge current. The 4000 mAh cell is fine but charges slowly.",
+  "The Plus variant defines ADC_BAT=GPIO10. Whether the XIAO ESP32-S3 Plus actually has a battery divider there is unknown. It is moot on this driver board anyway, because the battery is not routed to the XIAO BAT pads.",
+  "The destination of log_e/ets_printf output in this build was not fully traced. It may be UART0 only, or also the secondary USB-Serial-JTAG console. `Serial.setDebugOutput(true)` may be needed to see core logs in the monitor.",
+  "Nothing was compiled. All 'compiles' and 'no warning' statements come from reading headers and sources, not from a build.",
+  "The warning that an EPD panel left powered for long periods can be damaged comes from memory of vendor notes. It was not re-verified against the GDEY075T7 spec."
+ ],
+ "questions_for_user": [
+  "In the finished case, how will the device sit? Landscape with the side column on the right, as now? On which side does the display FPC exit? That decides display rotation 0 vs 2. Do you want a 'flip board' option for playing Black, or two players facing each other?",
+  "Are you willing to solder 2-3 thin wires to the XIAO Plus back pads? GPIO10 would take a battery-voltage divider. Another RTC pad would take a wake button. Or must the MakerWorld build stay solder-free on header pins only? Solder-free means no battery gauge unless the buzzer is dropped.",
+  "Nothing is wired yet. Are you OK swapping TP_INT to D9 (GPIO8) and the buzzer to D6 (GPIO43)? The cost is a faint tick from the buzzer at every boot. Or would you rather drop the buzzer?",
+  "How should the board wake from sleep in phase 4? Option A is touch-to-wake: the GT911 must stay in a mA-level scan mode, and INT must be on an RTC GPIO. Option B is a physical button in the case. Option C is the slide switch only. The answer changes both pin choice and case design.",
+  "What move latency is acceptable to you: about 0.5-0.7 s, or is about 1.5 s fine? How much flashing do you tolerate? Would you take a full black-white flash every N moves, or slight ghosting with rarer flashes?",
+  "Board look: keep 60-px squares edge to edge with no coordinates? Or 56-px squares with a 16-px gutter for a-h/1-8 labels, which also makes every partial window byte-aligned? How many mm of the active area will the case bezel cover on each side?",
+  "How will MakerWorld users flash the firmware? Option A is PlatformIO from source. Option B is a single merged .bin through a web flasher. With a merged .bin, the 16MB flash header (board id) and the pinned platform become mandatory.",
+  "Which instruments do you have for the validation session: multimeter, USB power meter, logic analyzer or oscilloscope? That decides whether phase 1 should include current-draw and I2C-signal checks or only on-screen and serial diagnostics."
+ ]
+}

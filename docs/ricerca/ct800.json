@@ -1,0 +1,353 @@
+{
+ "summary": "CT-800 remains the right engine, but it should be ported from its UCI tree and treated as a black-box UCI engine in its own FreeRTOS task. The UI should not borrow its rules code; a separate small rules library should serve both offline and Lichess modes.\n\n**What I could and could not check.** I did not download or unpack ct800-v1.46.zip, because the task and safety rules forbid downloads without Fabrizio's consent. No GitHub mirror or public repository exists. Every statement about the inside of the CT800 source tree is therefore inferred, not read. What I did read: ct800.net pages, the v1.56 manual PDF, TalkChess posts by the author, CCRL, and the local pioarduino sdkconfig and Arduino core.\n\n**What is verified about CT800:**\n- **Licence:** GPL \"Version 3 or later\". It covers the firmware, the UCI version, the tools and the opening book.\n- **Release:** latest is V1.46, dated 2024-08-29. The only distribution is a 4 MB zip on ct800.net.\n- **Strength:** about 2100-2200 Elo on a 168 MHz Cortex-M4 with 100 kB of hash. CCRL Blitz rates the 1.46 64-bit PC build at 2708.\n- **Code:** 15 C files, 33,000 lines, \"mostly C, and some assembly\".\n- **Memory model:** static allocation. The stack need is 26 kB for a 20-ply search. The 115 kB book and the 24 kB KPK bitbase are compiled in as C arrays.\n- **Pondering:** none.\n- **UCI build:** runs on Windows, Linux, Android, macOS and Raspberry Pi. Since V1.30 it has UCI Elo limiting by node-rate throttling, calibrated at startup, with a floor around 1000 Elo. Its Hash option was 1-1024 MB (default 8) in V1.20P04.\n- **Bare-metal build:** has no Elo numbers, only CPU speed (10-145 %) and eval noise (0-100 %).\n\n**ESP32-S3 facts from the local sdkconfig and Arduino core:**\n- The Arduino loop task has an 8192-byte stack on core 1.\n- The core 0 idle-task watchdog is on, with a 5 s timeout and panic. Core 1's idle task is not watched.\n- PSRAM is octal at 80 MHz, behind a 64 KB data cache. Code runs through a 32 KB instruction cache.\n\n**Alternatives.** I found no existing CT800 port to ESP32. The alternatives are weaker, rules-incomplete, non-free or not portable: micro-Max/mcu-max, TSCP, Sunfish, MinimalChess, Stockfish.\n\n**Licensing.** GxEPD2 is itself GPL-3.0, so the phase-1 firmware is already GPL-bound. The repo has no LICENSE file. Many Lichess piece sets are not GPL-compatible. The safe sets are cburnett and merida (GPLv2+), mpchess (GPLv3+), or Fabrizio's own artwork.",
+ "findings": [
+  {
+   "id": "E1",
+   "claim": "CT800 is licensed GPL-3.0-or-later, not GPL-3.0-only. The licence covers the firmware, the UCI version, the tools and the opening book.",
+   "evidence": "Manual v1.56 p.7: \"Licence: GNU General Public License (GPL), Version 3 or later.\" Download page: \"The GNU General Public License (GPL) Version 3 or later applies to firmware, UCI version, all tools, and the opening book.\" The engine is derived from NG-Play v9.86 by George Georgopoulos, plus the KPK bitbase by Marcel van Kervinck (manual p.7).",
+   "sources": [
+    "https://www.ct800.net/downloads/manual-ct800.pdf",
+    "https://www.ct800.net/download"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Declare the firmware repo as SPDX GPL-3.0-or-later (GPL-3.0-only is also allowed). Keep the Althoff, Georgopoulos and van Kervinck copyright headers intact. Mark modified files with a change notice and date, as GPLv3 section 5a requires."
+  },
+  {
+   "id": "E2",
+   "claim": "The only authoritative source is the release zip on ct800.net. There is no public git repository or GitHub mirror. The latest release is V1.46, dated 2024-08-29.",
+   "evidence": "News page: \"V1.46 (2024-Aug-29)\", with nothing newer listed as of 2026-09-21. Download page: downloads/ct800-v1.46.zip (4 MB); \"The releases contain binaries, source code, documentation, and a UCI version\"; \"Build scripts are included for Windows and Linux.\" A GitHub search for 'ct800 chess' returns only d3rvita/ct800-pcb, which is a PCB and not the source. Searches for mirrored source files found nothing.",
+   "sources": [
+    "https://www.ct800.net/news",
+    "https://www.ct800.net/download",
+    "https://github.com/search?q=ct800+chess&type=repositories"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Vendor the zip contents under lib/ct800/. Commit them unmodified first (\"import CT800 V1.46 unmodified\"), then put port patches in separate commits, so the diff against upstream stays auditable and a future V1.47 can be merged. I did not download the zip because of the no-download rule; Fabrizio must authorise that."
+  },
+  {
+   "id": "E3",
+   "claim": "CT800 is much stronger than the target audience needs. The author's claim is about 2100-2200 Elo on a 168 MHz Cortex-M4 with only 100 kB of hash. The PC UCI build is rated 2708 on CCRL Blitz.",
+   "evidence": "Manual p.7: \"Strength: around 2200 ELO (expert class)\", \"Hash tables: 100 kB\". Benchmarks page: \"ELO 2100 seems realistic\", with test suites giving 2135, 2144 and 2344. Depth against time from the start position on the device: \"11/6 12/13, 13/28\" (plies/seconds). CCRL Blitz list of 2026-09-21: CT800 1.46 64-bit = 2708 (1782 games), 1.45 = 2696.",
+   "sources": [
+    "https://www.ct800.net/downloads/manual-ct800.pdf",
+    "https://www.ct800.net/benchmarks",
+    "https://computerchess.org.uk/ccrl/404/cgi/compare_engines.cgi?family=CT800"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Do not spend effort on maximum strength. Hash size, PSRAM-versus-internal placement and node rate are second-order here. Spend the effort on good low levels and on a responsive UI."
+  },
+  {
+   "id": "E4",
+   "claim": "CT800 is \"mostly C, and some assembly\": 15 C files and 33,000 lines. The bare-metal firmware image is 272 kB, of which 115 kB is the opening book and 24 kB the KPK bitbase. Book and bitbase are compiled-in C arrays, so no filesystem is needed.",
+   "evidence": "Manual p.7: \"Programming language: mostly C, and some assembly\", \"Compiler: GCC 13.3.1 2024 ARM none-eabi\", \"The firmware image is 272 kB, out of which 115 kB are for the opening book data, and 24 kB for the endgame bitbase\", \"Opening book: 23,765 different plies in 13,563 unique positions\". History page: \"Originally, everything was in one single source file of 7,000 lines. Now it is 15 C source files with 33,000 lines.\" The book is \"an initialised binary array, included as a C file\".\nMy inferences, not read in source: engine code plus data is about 133 kB, which is trivial for 16 MB of flash. The const arrays land in flash rodata on the ESP32 automatically. The assembly is most likely Cortex-M startup or driver code in the firmware tree, since the UCI build also runs on x86, ARM64 and Android and so cannot depend on ARM assembly.",
+   "sources": [
+    "https://www.ct800.net/downloads/manual-ct800.pdf",
+    "https://www.ct800.net/history"
+   ],
+   "confidence": "medium",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Port from the UCI tree, not the STM32 firmware tree. The firmware tree's HMI, menu, keypad, LCD, watchdog and backup-RAM code is useless for a touch e-ink UI. After unpacking, grep for .s/.S files and asm blocks to confirm nothing in the engine core is ARM-specific."
+  },
+  {
+   "id": "E5",
+   "claim": "The bare-metal build uses static allocation, a 100 kB hash and about 26 kB of stack for a 20-ply search. The current maximum depth is 22 plies plus 10 plies of quiescence. The UCI build allocates its hash dynamically, with a Hash option of 1-1024 MB (default 8) in V1.20P04. The 1 MB minimum does not fit in ESP32-S3 internal SRAM.",
+   "evidence": "History page: \"For embedded systems, malloc is a no-go.\"; \"Initially, it needed 35 kB for 12 plies search depth, which I got down to 26 kB for 20 plies.\"; \"The initial static RAM usage was about 400 kB, plus dynamically allocated memory for the hash tables\" (the NG-Play baseline); the target had 192 kB. Manual p.7: \"Hash tables: 100 kB\", \"Free RAM: 16 kB\", \"Maximum search depth: 22 plies full search plus 10 plies quiescence\", \"Maximum game length: 250 moves\". UCI options quoted in TalkChess t=66273 (V1.20P04): \"Hash spin default 8 min 1 max 1024\", \"Keep Hash Tables\", \"CPU Speed [%]\", \"Contempt Value [cps]\", \"Move Overhead [ms]\". Board JSON seeed_xiao_esp32_s3_plus.json: maximum_ram_size 327680.",
+   "sources": [
+    "https://www.ct800.net/history",
+    "https://www.ct800.net/downloads/manual-ct800.pdf",
+    "https://talkchess.com/viewtopic.php?t=66273",
+    "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32_s3_plus.json"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "In the port shim, replace the UCI tree's hash allocation with heap_caps_malloc. Choose one of two placements and benchmark node rate for both:\n- 128-256 kB in internal RAM, allocated only while offline mode is active and freed before WiFi/TLS starts for Lichess.\n- 1-4 MB in PSRAM (MALLOC_CAP_SPIRAM).\nThe engine reaches about 2200 Elo with 100 kB, so small and fast may win. Add a FreeRTOS stack high-water-mark check. Xtensa windowed-ABI frames are larger than Thumb-2 frames, so budget 48-64 kB of internal stack rather than 26 kB.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Bare-metal CT800 V1.46: static allocation only, 100 kB hash, 192 kB RAM target, 16 kB free, max depth 22 plies + 10 quiescence; the author's historical stack figure is 26 kB for 20 plies (ARM Thumb-2). UCI build V1.20P04 (2018) exposes \"Hash spin default 8 min 1 max 1024\" (MB), so its hash is dynamically allocated; the V1.46 bounds are unverified (source only in the release zip). 1 MB does not fit in ESP32-S3 internal SRAM (320 kB DRAM per board JSON), BUT in this Arduino build plain malloc already falls through to PSRAM (CONFIG_SPIRAM_USE_MALLOC=1, ALWAYSINTERNAL threshold 4096 bytes), so the UCI hash works unpatched if Hash is set to <=4 MB; the default 8 MB will fail to allocate on an 8 MB PSRAM part. heap_caps_malloc is needed only to force an internal-RAM hash.",
+    "reasoning": "Re-fetched every primary source. ct800.net/history: \"For embedded systems, malloc is a no-go.\"; \"Initially, it needed 35 kB for 12 plies search depth, which I got down to 26 kB for 20 plies.\"; \"The initial static RAM usage was about 400 kB, plus dynamically allocated memory for the hash tables, and plus the stack.\"; \"The available RAM on the target platform is 192 kB\". Manual PDF p.6-7 (read page images myself): \"RAM: 192 kB + 4 kB backup-RAM\", \"Hash tables: 100 kB\", \"Maximum search depth: 22 plies full search plus 10 plies quiescence\", \"Maximum game length: 250 moves\", \"Free RAM: 16 kB\", \"Strength: around 2200 ELO\", \"Firmware version: V1.46\"; same figures on ct800.net/summary. TalkChess t=66273 (V1.20P04): \"option name Hash type spin default 8 min 1 max 1024\", plus Keep Hash Tables, Contempt Value [cps], CPU Speed [%] (min 1 max 100), Move Overhead [ms], and \"Eval Blur [cps]\" (no Eval Noise / UCI_Elo yet in that version). Local board JSON seeed_xiao_esp32_s3_plus.json: maximum_ram_size 327680 (the non-Plus JSON has the same value). Could NOT refute anything. Two limits: (1) the Hash bounds are verified only for V1.20P04 (Jan 2018); V1.46 source exists only inside ct800-v1.46.zip which I did not download and no GitHub mirror exists, so current bounds and the 'dynamic allocation' mechanism are inferred (a 1-1024 MB spin cannot be static), not read. (2) The recommended heap_caps_malloc patch is optional, not required: local qio_opi sdkconfig.h has CONFIG_SPIRAM_USE_MALLOC 1 and CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL 4096, so an unmodified malloc/calloc of a 1-4 MB hash is automatically served from the 8 MB PSRAM; only the default 8 MB cannot fit (PSRAM heap < 8 MB) so the shim must send \"setoption name Hash value <=4\" before first use, or patch the default. heap_caps_malloc(MALLOC_CAP_INTERNAL) is only needed to force the small-and-fast internal placement. Also verified in IDF heap_idf.c that pvPortMalloc uses MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT, so an xTaskCreate stack is internal by default. The 48-64 kB Xtensa stack budget is an inference, unmeasured.",
+    "sources": [
+     "https://www.ct800.net/history",
+     "https://www.ct800.net/downloads/manual-ct800.pdf",
+     "https://www.ct800.net/summary",
+     "https://talkchess.com/viewtopic.php?t=66273",
+     "https://www.ct800.net/download",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32_s3_plus.json",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/qio_opi/include/sdkconfig.h",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5.1/components/freertos/heap_idf.c"
+    ]
+   }
+  },
+  {
+   "id": "E6",
+   "claim": "Calling the engine from the Arduino loop task will overflow its stack. The default loop stack is 8192 bytes on core 1. A compute-bound task on core 0 that does not yield trips the task watchdog after 5 s and panics. The core 1 idle task is not watched.",
+   "evidence": "Local core 3.3.8, cores/esp32/main.cpp: \"#define ARDUINO_LOOP_STACK_SIZE 8192\" and \"xTaskCreateUniversal(loopTask, \\\"loopTask\\\", getArduinoLoopTaskStackSize(), NULL, 1, &loopTaskHandle, ARDUINO_RUNNING_CORE)\". Local esp32s3/qio_opi/include/sdkconfig.h: CONFIG_ARDUINO_RUNNING_CORE 1; CONFIG_ESP_TASK_WDT_INIT 1; CONFIG_ESP_TASK_WDT_PANIC 1; CONFIG_ESP_TASK_WDT_TIMEOUT_S 5; CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0 1 (no ..._CPU1 define exists); CONFIG_FREERTOS_HZ 1000; CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT 2048. esp32-hal.h declares disableCore0WDT() and disableCore1WDT(). ESP-IDF version is 5.5.4 (versions.txt).",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/main.cpp",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/qio_opi/include/sdkconfig.h",
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal.h"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "This integration shape is my inference from the facts above.\n- Create the engine task with xTaskCreatePinnedToCore(engineTask, \"ct800\", 65536 /*bytes*/, ..., prio, &h, core) and keep its stack in internal RAM.\n- Option (a): core 0 at tskIDLE_PRIORITY (0). It round-robins with IDLE0, which feeds the watchdog, and WiFi or UI work preempts it for free.\n- Option (b): core 0 at priority 1 with vTaskDelay(1) about every second of search.\n- Do not use disableCore0WDT() in a release.\n- The UI, touch and e-ink code stays in loop() on core 1, so a 1-2 s GxEPD2 refresh never blocks the engine and the engine never blocks touch.\n- Interface: two FreeRTOS stream buffers or queues carrying plain UCI text. Send \"position startpos moves ...\", \"go movetime N\" and \"stop\". Receive \"info score/pv\" and \"bestmove\".\n- If the UCI tree uses pthreads (unverified), either set stack size and core with esp_pthread_set_cfg(), because the default pthread stack is only 2048 bytes, or replace the threads with FreeRTOS tasks.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "The Arduino loop task has an 8192-byte stack (bytes, not words), priority 1, core 1; calling a ~26 kB-deep recursive search from loop() overflows it unless SET_LOOP_TASK_STACK_SIZE() is used. The TWDT (5 s, panic) watches only IDLE0; IDLE1 is not watched. A compute-bound task on core 0 at priority >= 1 that never blocks starves IDLE0 and panics after 5 s. At priority 0 it does not trip the watchdog but, because configIDLE_SHOULD_YIELD=0 and the idle hook executes WFI, it gets only about half of core 0 (1 ms engine / 1 ms idle). Preferred shape: dedicated task, 48-64 kB internal stack, core 0, priority 1, vTaskDelay(1) every <= 1-2 s of search; UI stays in loop() on core 1.",
+    "reasoning": "All quoted local facts re-read. cores/esp32/main.cpp line 17 \"#define ARDUINO_LOOP_STACK_SIZE 8192\", line 113 \"xTaskCreateUniversal(loopTask, \\\"loopTask\\\", getArduinoLoopTaskStackSize(), NULL, 1, &loopTaskHandle, ARDUINO_RUNNING_CORE)\". qio_opi sdkconfig.h: CONFIG_ARDUINO_RUNNING_CORE 1, CONFIG_ARDUINO_LOOP_STACK_SIZE 8192, CONFIG_ESP_TASK_WDT_INIT 1, _PANIC 1, _TIMEOUT_S 5, _CHECK_IDLE_TASK_CPU0 1; raw sdkconfig line 2173 \"# CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1 is not set\"; CONFIG_FREERTOS_HZ 1000; CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT 2048. esp32-hal.h lines 124-130 declare enable/disableCore0WDT and Core1WDT. versions.txt: \"esp-idf: v5.5.4\". Stack size is in bytes (portSTACK_TYPE uint8_t; idf_additions.h \"specified as the NUMBER OF BYTES\"). 8192 B < the engine's 26 kB ARM figure, so overflow from loop() is certain unless the stack is enlarged. Two corrections. (1) The watchdog statement holds only for engine priority >= 1; at priority 0 IDLE0 still gets time slices. (2) Recommended option (a) is worse than presented: local FreeRTOSConfig.h has configIDLE_SHOULD_YIELD 0 and configUSE_TIME_SLICING 1, and IDF esp_vApplicationIdleHook() ends in esp_cpu_wait_for_intr() (read in freertos_hooks.c). So a priority-0 engine alternates 1 ms ticks with an IDLE0 that sleeps its whole slice in WFI: the engine gets roughly 50 % of core 0 (my inference from those verified settings, not measured). Option (b) (priority 1 on core 0 plus vTaskDelay(1) at least every ~1-2 s so IDLE0 can feed the TWDT) keeps ~100 % and should be the default. Also not mentioned: Arduino.h line 225 provides SET_LOOP_TASK_STACK_SIZE(sz), a one-line way to enlarge the loop stack for a quick first test (UI blocks during search, so not the final design). Whether the UCI tree uses pthreads remains unverified (source not readable online).",
+    "sources": [
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/main.cpp",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/Arduino.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal-misc.c",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/qio_opi/include/sdkconfig.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/include/freertos/config/include/freertos/FreeRTOSConfig.h",
+     "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/versions.txt",
+     "https://raw.githubusercontent.com/espressif/esp-idf/v5.5.1/components/esp_system/freertos_hooks.c"
+    ]
+   }
+  },
+  {
+   "id": "E7",
+   "claim": "PSRAM speed caveats apply, and the hash table is the worst-case access pattern for the PSRAM cache.\n- PSRAM is octal at 80 MHz behind a 64 KB data cache.\n- PSRAM is inaccessible while flash is being written.\n- A task stack can live in PSRAM only through xTaskCreateStatic.\n- Code executes from flash through a 32 KB instruction cache.",
+   "evidence": "Local sdkconfig.h: CONFIG_SPIRAM_MODE_OCT 1, CONFIG_SPIRAM_SPEED 80, CONFIG_ESP32S3_DATA_CACHE_SIZE 0x10000, CONFIG_ESP32S3_INSTRUCTION_CACHE_SIZE 0x8000, CONFIG_SPIRAM_USE_MALLOC 1, CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL 4096, CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP 1, CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM 1. ESP-IDF v5.5 external RAM docs: \"When flash cache is disabled (for example, if the flash is being written to), the external RAM also becomes inaccessible\"; \"when accessing large chunks of data (> 32 KB), the cache can be insufficient, and speeds will fall back\"; external stacks require xTaskCreateStatic. The project's platformio.ini already sets memory_type = qio_opi and -DBOARD_HAS_PSRAM, so ps_malloc and heap_caps_malloc will work.\nMy inferences: every random hash probe is a PSRAM cache miss, costing a few microseconds for a 64-byte cache line over OPI at 80 MHz. At MCU node rates (tens of thousands of nodes per second) that is a single-digit to low-double-digit percentage slowdown, which is acceptable. The hot search and eval code is likely larger than 32 KB, so flash instruction-cache misses may make the S3 slower than the 168 MHz STM32F4 that CT800 was tuned on, despite 240 MHz.",
+   "sources": [
+    "/Users/fabriziodrago/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/qio_opi/include/sdkconfig.h",
+    "https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32s3/api-guides/external-ram.html",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/platformio.ini"
+   ],
+   "confidence": "medium",
+   "impact": "minor",
+   "contradicts_plan": false,
+   "recommended_action": "Keep the engine stack and the move and search arrays in internal RAM. Only the transposition and pawn hash may go to PSRAM. Avoid NVS or LittleFS writes (such as autosave) while a search is running, or accept the stall. Add a bench command that prints nodes per second, so the first hardware session yields numbers for internal versus PSRAM hash. Consider IRAM_ATTR only if profiling shows instruction-cache thrash."
+  },
+  {
+   "id": "E8",
+   "claim": "Strength limiting works differently in the two builds.\n- The bare-metal firmware has no Elo levels, only CPU speed (10-145 %) and eval noise (0-100 %, where 100 % is \"mostly random moves\").\n- The UCI build has had the standard UCI Elo-limit options since V1.30. They are implemented as node-rate throttling with real sleeps, calibrated to machine speed at startup, with a floor around 1000 Elo.\n- The Elo mode has a known inaccuracy for move times under 15 s.",
+   "evidence": "Manual p.27: \"0 % sets no noise, i.e. full playing strength, while 100 % means mostly random moves. Besides, 30 % or more will disable selective deepening of checking moves\"; \"it recommended to first reduce the CPU speed, and only if that is not enough, to add noise. The reason is that reducing the CPU speed does not influence the playing style while adding noise does.\" V1.30 notes: \"Added support for the UCI standard options that set the engine strength in Elo.\", \"Added the UCI option 'Eval Noise [%]'.\" V1.43: \"More strength throtteling at the low end around 1000 Elo.\" Known issue in V1.30 through V1.46: \"Elo throttling with move time below 15 seconds can add up to 50 Elo instead of subtracting.\" Author on TalkChess t=72183: \"The NPS throttling works by dividing every second into slices of 10ms each\"; \"I calibrate the machine speed at engine startup and determine the upper end of the available Elo throttling range that the UCI_Elo command offers\". He uses thread sleep rather than busy-waiting. Chesstroid: \"In Elo limited mode, the UCI parameters node rate, CPU speed and eval noise are overridden.\"",
+   "sources": [
+    "https://www.ct800.net/downloads/manual-ct800.pdf",
+    "https://www.ct800.net/sw-release-v130",
+    "https://www.ct800.net/sw-release-v146",
+    "https://talkchess.com/viewtopic.php?t=78047",
+    "https://www.talkchess.com/forum3/viewtopic.php?t=72183",
+    "https://chesstroid.blogspot.com/2018/02/android-uci-engine-update-ct800-v120.html"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Use the UCI tree, which gives UCI_LimitStrength and UCI_Elo for free. Mapping the throttle sleep to vTaskDelay also saves battery at low levels. An engine rating of 1000 is still tough for true beginners or children, so add two or three sub-1000 levels using Eval Noise % without the Elo mode, since the Elo mode overrides noise. The exact UCI_Elo minimum and maximum in V1.46 are unverified; the engine prints them in reply to a `uci` command on hardware.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "Bare-metal CT800 has no Elo levels, only CPU speed 10-145 % and eval noise 0-100 %. The UCI build has UCI_LimitStrength/UCI_Elo plus 'Eval Noise [%]' since V1.30 (2018-05-08); Elo mode is node-rate throttling in 10 ms slices using real thread sleep, with the top of the UCI_Elo range calibrated to machine speed at startup; Elo mode overrides node rate, CPU speed and eval noise; low end is 'around 1000 Elo' per the V1.43 note (exact min/max unverified, and the calibrated maximum on an ESP32-S3 is unknown until run on hardware). Known issue through V1.46: below 15 s per move the throttle can add up to 50 Elo instead of subtracting.",
+    "reasoning": "Manual p.27 read directly: 5.6.2 Noise \"0 % sets no noise, i.e. full playing strength, while 100 % means mostly random moves. Besides, 30 % or more will disable selective deepening of checking moves.\"; note \"it recommended to first reduce the CPU speed, and only if that is not enough, to add noise...\"; 5.6.3 Speed \"ranging from 10 % to 145 %\". Manual TOC (p.2-3) has no Elo/level menu item: only 5.6.2 Noise and 5.6.3 Speed, so 'no Elo levels in bare-metal' holds. sw-release-v130 (2018-05-08): \"Added support for the UCI standard options that set the engine strength in Elo.\", \"Added the UCI option 'Eval Noise [%]'.\", \"Removed the UCI option 'Eval Blur [cps]'.\"; consistent with the V1.20P04 option dump which shows Eval Blur and no UCI_Elo. Known issue present verbatim on both v130 and v146 pages: \"Elo throttling with move time below 15 seconds can add up to 50 Elo instead of subtracting.\" TalkChess t=78047 V1.43 UCI note: \"More strength throtteling at the low end around 1000 Elo\". TalkChess t=72183 (Ras): \"The NPS throttling works by dividing every second into slices of 10ms each\"; \"That's actual thread sleep, not busy waiting\"; \"I calibrate the machine speed at engine startup and determine the upper end of the available Elo throttling range that the UCI_Elo command offers.\" Chesstroid: \"In Elo limited mode, the UCI parameters node rate, CPU speed and eval noise are overridden.\" Nothing contradicted. Caveats: 'floor around 1000' is a reading of the V1.43 note, not a number from source; exact UCI_Elo min/max unverified; because the upper end is calibrated to machine speed at startup, on a 240 MHz ESP32-S3 the offered maximum will likely be far below the desktop value and the Elo-to-NPS mapping may assume desktop node rates (inference, needs hardware). With CONFIG_FREERTOS_HZ=1000 the 10 ms slices map cleanly to vTaskDelay.",
+    "sources": [
+     "https://www.ct800.net/downloads/manual-ct800.pdf",
+     "https://www.ct800.net/sw-release-v130",
+     "https://www.ct800.net/sw-release-v146",
+     "https://talkchess.com/viewtopic.php?t=78047",
+     "https://www.talkchess.com/forum3/viewtopic.php?t=72183",
+     "https://chesstroid.blogspot.com/2018/02/android-uci-engine-update-ct800-v120.html",
+     "https://talkchess.com/viewtopic.php?t=66273"
+    ]
+   }
+  },
+  {
+   "id": "E9",
+   "claim": "CT800 does not ponder. Its time controls are rich. In UCI, `go movetime`, `go wtime/btime/inc` and `go depth` map straight to the UI, and `stop` forces a move.",
+   "evidence": "Manual p.7: \"Pondering: none.\" Manual p.25: time per move \"minimal, 5, 10, 20, 30, 60, 120, 180\" s; game-in 5-90 min; tournament modes; Fischer delay off/10/20/30 s; analysis mode 9 h; mate-in 1-8 moves. Manual p.9-10 describes quick replies (book move, single legal move, obvious move) and \"If it has already used up more than 55 % of the allocated move time when starting the next search depth iteration, it will drop the next depth iteration\". The V1.12 notes mention fixed-depth search under UCI. The author checks the clock about once per millisecond (TalkChess t=72183).",
+   "sources": [
+    "https://www.ct800.net/downloads/manual-ct800.pdf",
+    "https://www.ct800.net/sw-release-v112",
+    "https://www.talkchess.com/forum3/viewtopic.php?t=72183"
+   ],
+   "confidence": "high",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "No pondering is a benefit on a battery device. While the human thinks, use light sleep or a lowered CPU frequency. Expose both \"seconds per move\" and a chess-clock mode; the engine handles both natively."
+  },
+  {
+   "id": "E10",
+   "claim": "CT800 implements the complete rules internally but is not a reusable rules library. A separate small rules library is the better design. thc-chess-library (MIT, two files) covers everything the UI needs, with no dependency on the engine.",
+   "evidence": "CT800: ft-chess page: \"The chess rules are implemented completely, including all castling rules as well as 'en passant'\"; threefold repetition \"including non-successive occurrences\"; \"Draw by fifty moves is also incorporated\"; underpromotion supported. Manual p.8: \"checks whether an entered move conforms to the chess rules and will refuse invalid moves\". Its pretty-print format is long algebraic \"Ng1-f3\" with + and #, which is not SAN. Its design is static and global-state (history page).\nMy inferences: the move generator cannot be called from the UI task while a search is running, and it cannot serve Lichess games without dragging the engine in.\nthc (README, thc.h, LICENSE): MIT (c) 2014 billforsternz; \"Import/export moves using SAN\", \"Generate legal move list, understands all chess rules\", \"Evaluate positions for mate and all draw rules\". API: ChessRules::GenLegalMoveList, PlayMove, Evaluate(TERMINAL&), IsDraw(bool, DRAWTYPE&) with DRAWTYPE_50MOVE/INSUFFICIENT/REPITITION, GetRepetitionCount, Move::NaturalIn/NaturalOut (SAN), TerseIn/TerseOut (UCI-style), Forsyth/ForsythPublish (FEN). It depends only on std::string and std::vector and keeps a history[256] ring buffer.\nLichess: /api/puzzle/daily returns game.pgn in SAN, puzzle.solution in UCI, and puzzle.fen plus initialPly.",
+   "sources": [
+    "https://www.ct800.net/ft-chess",
+    "https://www.ct800.net/downloads/manual-ct800.pdf",
+    "https://github.com/billforsternz/thc-chess-library",
+    "https://raw.githubusercontent.com/billforsternz/thc-chess-library/master/src/thc.h",
+    "https://raw.githubusercontent.com/billforsternz/thc-chess-library/master/LICENSE",
+    "https://lichess.org/api/puzzle/daily"
+   ],
+   "confidence": "high",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Reorder phase 2. Do the rules layer first, either thc or a hand-written 0x88 move generator with perft tests. It must provide legal-move highlighting on long-press, check, mate, stalemate, the draw rules, the promotion dialog, and SAN, UCI and FEN conversion. Human-versus-human, offline-engine and Lichess modes all share it. Then add CT800 behind a UCI text queue, fed with \"position startpos moves ...\" from the rules layer's move list. CT800 keeps its own repetition and 50-move handling for the search. Replace the phase-1 BoardState char[64] with the rules object as the single source of truth. Puzzles can start from puzzle.fen; SAN parsing is needed only for PGN replay and for showing the last move.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As claimed, with two precisions: (1) Lichess puzzle.fen is the position AFTER the initial (opponent) move, and puzzle.lastMove gives that move in UCI, so a puzzle can be shown with no PGN/SAN parsing at all; game.pgn is a bare SAN move list without move numbers. (2) thc's repetition enum is spelled DRAWTYPE_REPITITION, its history is a 256-half-move ring, and it uses std::string/std::vector (heap) for SAN/FEN and the vector overloads; the MOVELIST* overloads avoid heap use. CT800's unsuitability as a rules library is an inference, not read from source.",
+    "reasoning": "ct800.net/ft-chess verbatim: \"The chess rules are implemented completely, including all castling rules as well as \\\"en passant\\\".\"; \"Underpromotion is possible, both for the computer and the user.\"; \"Draw by threefold repetition works, also if the repetition does not occur in successive moves.\"; \"Draw by fifty moves is also incorporated.\" Manual p.8-9 read directly: \"checks whether an entered move conforms to the chess rules and will refuse invalid moves\"; display format \"Ng1-f3\", \"x\" for captures, \"+\"/\"#\" appended, i.e. long algebraic, not SAN. thc LICENSE: \"The MIT License (MIT)\", \"Copyright (c) 2014 billforsternz\". thc README: \"Import/export moves using SAN\", \"Generate legal move list, understands all chess rules\", \"Evaluate positions for mate and all draw rules\", \"You just need to grab two files thc.cpp ... and thc.h\". thc.h: includes only <stddef.h>, <stdint.h>, <string.h>, <string>, <vector>; GenLegalMoveList (4 overloads incl. fixed MOVELIST* without std::vector), PlayMove, Evaluate(TERMINAL&), IsDraw(bool, DRAWTYPE&), GetRepetitionCount, NaturalIn/NaturalOut, TerseIn/TerseOut, Forsyth/ForsythPublish; DRAWTYPE {NOT_DRAW, DRAWTYPE_50MOVE, DRAWTYPE_INSUFFICIENT, DRAWTYPE_INSUFFICIENT_AUTO, DRAWTYPE_REPITITION}; \"Move history[256]\" and \"DETAIL detail_stack[256]\" rings. Issue tracker: #10 is only the REPITITION spelling, #21 a missing <stdint.h> in the split sources, #12 (half/full move clock) fixed 2021; no open move-gen or SAN bugs. Lichess: live GET /api/puzzle/daily returned puzzle keys id, rating, plays, solution, themes, fen, lastMove, initialPly; solution [\"e5f4\",\"c3c4\",\"h6h2\"] (UCI); game.pgn \"d4 Nf6 Bf4 e6 ...\" (SAN, no move numbers). lila JsonView.scala puzzleJsonInitialPos writes fen = position after the initial move, plus lastMove (UCI). Not verifiable: 'CT800 is global-state / not reusable / cannot be called during search' is inference (source only in the zip); it is plausible and the UCI-text boundary makes it moot.",
+    "sources": [
+     "https://www.ct800.net/ft-chess",
+     "https://www.ct800.net/downloads/manual-ct800.pdf",
+     "https://raw.githubusercontent.com/billforsternz/thc-chess-library/master/LICENSE",
+     "https://raw.githubusercontent.com/billforsternz/thc-chess-library/master/README.md",
+     "https://raw.githubusercontent.com/billforsternz/thc-chess-library/master/src/thc.h",
+     "https://github.com/billforsternz/thc-chess-library/issues?q=is%3Aissue",
+     "https://lichess.org/api/puzzle/daily",
+     "https://raw.githubusercontent.com/lichess-org/lila/master/modules/puzzle/src/main/JsonView.scala"
+    ]
+   }
+  },
+  {
+   "id": "E11",
+   "claim": "I found no existing port of CT800 to ESP32, RP2040 or Teensy. The ESP32 chess engines that exist are much weaker or rules-incomplete.",
+   "evidence": "Searches for a CT800 port to ESP32, RP2040 or Teensy returned nothing. CT800's official targets are STM32F405 and GD32F405 plus the UCI build for Windows, Linux, Android, macOS and Raspberry Pi (download page).\nExisting engines:\n- hpsaturn/esp32-chess-engine: GPL-3.0, Sergey Urusov's own engine from Hackster, serial console, with PlatformIO environments for esp32 and esp32s3. A search snippet says \"above 20,000 positions per second\". No Elo is published.\n- Gissio/mcu-max v1.0.6: MIT, based on micro-Max. API: mcumax_search_valid_moves, mcumax_search_best_move(node_max, depth_max), mcumax_play_move, mcumax_set_fen_position, mcumax_stop_search. The README warns to \"adjust the max depth value to avoid stack overflows\". A search snippet says it is used in ESP32-S3 chess-robot builds.\n- Raspberry Pi Pico 2 Chess on Hackaday: a from-scratch Python engine.\n- Stockfish issue #4017, asking for an ESP32 build: compile errors and no maintainer response.",
+   "sources": [
+    "https://github.com/hpsaturn/esp32-chess-engine",
+    "https://github.com/Gissio/mcu-max",
+    "https://raw.githubusercontent.com/Gissio/mcu-max/main/src/mcu-max.h",
+    "https://hackaday.io/project/203801-raspberry-pi-pico-2-chess",
+    "https://github.com/official-stockfish/Stockfish/issues/4017",
+    "https://www.ct800.net/download"
+   ],
+   "confidence": "medium",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Plan for an original port. My effort estimate: 2-4 days to the first bestmove on hardware from the UCI tree, replacing I/O, threads, timer and hash allocation, plus 1-2 days for stack, watchdog and hash placement and a node-rate benchmark. \"First serious 2200-Elo engine on an ESP32 e-ink board\" is a selling point for the MakerWorld page."
+  },
+  {
+   "id": "E12",
+   "claim": "Alternatives compared by licence, footprint and fit.\n- micro-Max: the source page has no explicit licence. No underpromotion and no repetition or 50-move handling.\n- Fairy-Max 4.8: \"free software, ... do with it whatever you want\".\n- mcu-max: MIT.\n- TSCP: proprietary, permission required.\n- Sunfish: GPL-3, Python, no 50-move rule.\n- MinimalChess: MIT, but C#/.NET.\n- Modern Stockfish: not feasible.",
+   "evidence": "- micro-Max page: the header names only H.G. Muller, with no licence text. Underpromotion is described as \"a dull input problem\" and omitted in the main version.\n- Debian fairymax copyright: \"Fairy-Max 4.8 is free software, and you have my permission do with it whatever you want, whether it is commercial or not.\"\n- mcu-max README: \"distributed under the MIT license\".\n- TSCP: \"TSCP is copyrighted. If you want to copy it (all or part of it) or create a derivative work, you need my permission.\" 2,248 lines of C.\n- Sunfish README: GNU GPL v3, Python, \"supports all chess rules, except the 50-move draw rule\".\n- MinimalChess: MIT, C# .NET 5, 2443 Elo on CCRL Blitz, 708 LOC.\n- My inferences, not verified: modern Stockfish needs NNUE nets of tens of MB and 64-bit bitboards. Classical bitboard GPL engines such as Fruit, Xiphos and Weiss have no embedded-friendly static memory model, no built-in book and no Elo limiter.\n- CT800 for comparison: static memory, a stack-bounded search of 26 kB for 20 plies, a built-in book of 23,765 plies, the KPK bitbase, Elo limiting, and a mailbox design made for a 32-bit MCU with 192 kB of RAM.",
+   "sources": [
+    "https://home.hccnet.nl/h.g.muller/max-src2.html",
+    "https://metadata.ftp-master.debian.org/changelogs/main/f/fairymax/unstable_copyright",
+    "https://raw.githubusercontent.com/Gissio/mcu-max/main/README.md",
+    "http://www.tckerrigan.com/Chess/TSCP/",
+    "https://github.com/thomasahle/sunfish",
+    "https://github.com/lithander/MinimalChessEngine",
+    "https://www.ct800.net/history"
+   ],
+   "confidence": "medium",
+   "impact": "info",
+   "contradicts_plan": false,
+   "recommended_action": "Keep CT800. It is the only candidate that combines about 2200 Elo on MCU-class hardware, a built-in book, human-friendly Elo limiting, full rules, an embedded-first memory discipline, and a copyleft licence that the project already carries through GxEPD2. If the port unexpectedly stalls, fall back to mcu-max (MIT, a day of work, about 1900-class play) and put the rules library on top to cover its rule gaps. Skip TSCP for licence reasons. Skip Sunfish and MinimalChess, which are in the wrong language."
+  },
+  {
+   "id": "E13",
+   "claim": "The firmware is already GPL-bound in phase 1, because GxEPD2 is GPL-3.0. The README's rationale, that GPL is \"richiesta dall'integrazione futura di CT-800\", is incomplete. The delivered repo also has no LICENSE or COPYING file, and it contains a stray directory literally named \"{src,docs}\".",
+   "evidence": "The GxEPD2 GitHub sidebar shows \"GPL-3.0 license\" and a LICENSE file. platformio.ini lib_deps: \"zinggjm/GxEPD2 @ ^1.6.2\" and \"adafruit/Adafruit GFX Library @ ^1.11.11\". The Adafruit GFX README says \"BSD license\". A listing of the eink-chess folder shows .gitignore, README.md, docs/, platformio.ini, src/ and an empty directory named '{src,docs}' (a shell brace-expansion mishap), and no LICENSE file. README.md: \"## Licenza GPL-3.0 (richiesta dall'integrazione futura di CT-800).\"",
+   "sources": [
+    "https://github.com/ZinggJM/GxEPD2",
+    "https://raw.githubusercontent.com/adafruit/Adafruit-GFX-Library/master/README.md",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/README.md",
+    "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/platformio.ini"
+   ],
+   "confidence": "high",
+   "impact": "minor",
+   "contradicts_plan": true,
+   "recommended_action": "- Add a COPYING file with the full GPL-3.0 text and SPDX headers (GPL-3.0-or-later) in each source file.\n- Add a THIRD-PARTY.md listing GxEPD2 (GPL-3.0), Adafruit GFX (BSD), the Arduino-ESP32 core (LGPL-2.1), ESP-IDF (Apache-2.0, which is compatible only with GPLv3, not GPLv2), CT800 (GPL-3.0-or-later), and the rules library.\n- Remove the stray '{src,docs}' directory from the repo and the zip.\n- For releases, pin exact library versions instead of ^ ranges, so the \"Corresponding Source\" reproduces the shipped binary.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "The firmware is already GPL-3.0-bound in phase 1 because it links GxEPD2 (GPL-3.0, LICENSE file verified; current release 1.6.9); Adafruit GFX is BSD. README's rationale (only CT-800) is incomplete, the project folder has no LICENSE/COPYING file, and it contains an empty stray directory named '{src,docs}'.",
+    "reasoning": "GxEPD2 LICENSE raw file begins \"GNU GENERAL PUBLIC LICENSE / Version 3, 29 June 2007\"; GitHub sidebar shows GPL-3.0; library.properties version=1.6.9 (so ^1.6.2 floats to 1.6.9 today, supporting the pin-versions advice). Adafruit GFX README: \"BSD license, check license.txt for more information\". Local platformio.ini lib_deps: \"zinggjm/GxEPD2 @ ^1.6.2\" and \"adafruit/Adafruit GFX Library @ ^1.11.11\". Local README.md lines 40-41: \"## Licenza\" / \"GPL-3.0 (richiesta dall'integrazione futura di CT-800).\" ls -la of eink-chess shows .gitignore, README.md, docs, platformio.ini, src and an empty directory literally named \"{src,docs}\" (64 bytes, created 18:00); no LICENSE/COPYING file. Any distributed binary statically linking GxEPD2 must already be GPL-3.0, so the README rationale is incomplete. Nothing refuted. Aside noticed while reading platformio.ini (outside this finding, not analysed further): it selects board = seeed_xiao_esp32s3 whose JSON says flash_size 8MB / maximum_size 8388608 while overriding partitions to default_16MB.csv; a dedicated seeed_xiao_esp32_s3_plus board (16MB, variant XIAO_ESP32S3_Plus) exists locally and is the safer choice.",
+    "sources": [
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/LICENSE",
+     "https://github.com/ZinggJM/GxEPD2",
+     "https://raw.githubusercontent.com/ZinggJM/GxEPD2/master/library.properties",
+     "https://raw.githubusercontent.com/adafruit/Adafruit-GFX-Library/master/README.md",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/README.md",
+     "/private/tmp/claude-501/-Users-fabriziodrago-Downloads-collecticraft-studio/a3ff4289-01a0-4361-8319-c3a9a6600518/scratchpad/eink/eink-chess/platformio.ini",
+     "/Users/fabriziodrago/.platformio/platforms/espressif32/boards/seeed_xiao_esp32s3.json"
+    ]
+   }
+  },
+  {
+   "id": "E14",
+   "claim": "GPL-3 has two distribution mechanics that matter for the MakerWorld release.\n- Any prebuilt .bin or web flasher must point to the exact corresponding source \"next to\" the binary.\n- The device must stay user-reflashable: no secure-boot or flash-encryption lock, and no OTA that accepts only signed images.\nThe 3D case is a separate work and may carry a different licence. MakerWorld's Standard Digital File License forbids redistribution, so it must not be applied to the GPL firmware.",
+   "evidence": "Manual p.7 restates the obligation: \"those who receive the executable program (e.g. inside the chess computer itself) have the right to also obtain the program source text, the build scripts and the instructions how to install the executable program\". This is GPLv3 section 6, including Installation Information for User Products; section 6d covers network distribution. The MakerWorld Standard Digital File License is summarised by secondary sources (modelrover, the Bambu forum) as: \"personal printing only, no resale of physical prints, no remixes, no file redistribution\". The Exclusive Model Program is a separate agreement.\nMy inferences, not legal advice: \"no further restrictions\" in GPLv3 section 10 conflicts with shipping GPL binaries under the Standard Digital File License. Linking Espressif's closed WiFi and PHY blobs into a GPL-3 binary is a widely tolerated grey area; Tasmota (GPL-3) does the same. Only the CT800 and GxEPD2 copyright holders would have standing to complain.",
+   "sources": [
+    "https://www.ct800.net/downloads/manual-ct800.pdf",
+    "https://makerworld.com/en/exclusive-model-policy",
+    "https://modelrover.com/g/makerworld-standard-digital-file-license",
+    "https://forum.bambulab.com/t/understanding-makerworlds-standard-digital-file-license/257609"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "- Host the firmware source and release binaries on GitHub, with tagged releases and the .bin built from the tag by CI.\n- On MakerWorld, upload only the case files (STL, 3MF, STEP). Link the GitHub release and the web flasher in the description rather than attaching the .bin to the listing.\n- Never enable secure boot or flash encryption. Keep OTA open.\n- Anyone selling assembled units must pass on the source offer; say so in the README.\n- Send a courtesy email to info@ct800.net announcing the port. The author is active on TalkChess and approachable. That also defuses the Espressif blob question.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "GPLv3 6d: any hosted .bin/web flasher needs clear directions next to it to the exact Corresponding Source (tagged release). GPLv3 section 6 Installation Information: anyone who transfers an assembled device (sale or gift) must give recipients everything needed to install modified firmware, including any signing keys; it does not ban secure boot or signed OTA per se, and it does not bind someone who only publishes firmware, but leaving secure boot and flash encryption off and USB flashing open is the simplest compliant design. The printed case is a separate work and may use another licence. MakerWorld's Standard Digital File License (text seen only via forum quotation; official page returned 403) prohibits sharing/hosting/distributing the file and derivatives, so it must not cover GPL firmware: keep firmware on GitHub and/or choose a CC licence for the case.",
+    "reasoning": "GPL parts verified against gnu.org gpl-3.0.txt: 6d \"Convey the object code by offering access from a designated place ... and offer equivalent access to the Corresponding Source in the same way through the same place at no further charge\" with the different-server allowance conditioned on clear directions next to the object code; section 10 \"You may not impose any further restrictions on the exercise of the rights granted or affirmed under this License.\" Manual p.7 quote read directly: \"those who receive the executable program (e.g. inside the chess computer itself) have the right to also obtain the program source text, the build scripts and the instructions how to install the executable program on the chess computer.\" ct800.net/download: \"GPL Version 3 or later applies to firmware, UCI version, all tools, and the opening book.\" The reflashability bullet is overstated in two ways: (a) the Installation Information duty in section 6 triggers only when object code is conveyed in/with/for a User Product as part of a transaction transferring possession of that product, i.e. it binds whoever sells or gives away assembled boards, not Fabrizio merely publishing a .bin for DIY builders; (b) GPLv3 does not forbid secure boot, flash encryption or signed-only OTA as such; it requires supplying whatever keys/procedures are needed so a modified build installs and keeps working. A signed-only OTA is fine if open USB flashing remains. Never enabling secure boot/flash encryption is simply the easiest way to comply. MakerWorld: primary pages unreachable (makerworld.com 403, wiki.bambulab.com 402). The licence sentence was seen only as quoted by users in Bambu forum thread 103998: \"You are prohibited from sharing, sub-licensing, selling, renting, hosting, transferring, or distributing the digital file, 3D printed versions, or any other derivative works of this object ... including remixes\"; modelrover summarises identically and lists MakerWorld's alternatives (CC BY, CC BY-NC, CC BY-NC-SA, CC0 ...). That text is plainly incompatible with GPL redistribution rights, so the conclusion stands, but treat the MakerWorld wording as secondary-sourced. Unverified: whether a MakerWorld listing can carry a .bin attachment at all, and whether the listing licence is deemed to cover attachments. Espressif-blob and 'separate work' statements are legal inferences, not verifiable facts.",
+    "sources": [
+     "https://www.gnu.org/licenses/gpl-3.0.txt",
+     "https://www.ct800.net/downloads/manual-ct800.pdf",
+     "https://www.ct800.net/download",
+     "https://forum.bambulab.com/t/standard-digital-file-license-question/103998",
+     "https://modelrover.com/g/makerworld-standard-digital-file-license",
+     "https://makerworld.com/en/exclusive-model-policy"
+    ]
+   }
+  },
+  {
+   "id": "E15",
+   "claim": "Bundled artwork and fonts do add constraints. Bitmaps compiled into the firmware should be GPL-compatible. Several popular Lichess piece sets are not.",
+   "evidence": "Lichess lila COPYING.md:\n- Compatible: cburnett (Colin M.L. Burnett, GPLv2+), merida (GPLv2+), mono (GPLv2+), mpchess (GPLv3+), fantasy and spatial (MIT), shapes (CC BY-SA 4.0), kiwen-suwi (CC BY 4.0).\n- Not compatible: alpha (\"free for personal non commercial use\"), leipzig and companion (\"freeware\"), and the sets under CC BY-NC-SA 4.0: california, cardinal, staunty, maestro, fresca, tatiana, gioco, dubrovny, icpieces, horsey and anarcandy.\n- pirouetti, letter and pixel are AGPLv3+. They can be combined with GPLv3 under section 13, but they add AGPL terms.\nMy licence inferences: CC BY-SA 4.0 is one-way compatible into GPLv3. NonCommercial clauses and \"freeware\" grants are incompatible with GPL's no-further-restrictions rule.\nFonts, from memory: the Adafruit GFX library is BSD, and its bundled FreeMono, FreeSans and FreeSerif faces derive from GNU FreeFont (GPLv3+ with a font exception), which is compatible. The Adafruit README itself does not state the fonts' origin. SIL OFL fonts may be bundled or embedded, but a rasterised bitmap derivative must drop any Reserved Font Name and must ship the OFL text.",
+   "sources": [
+    "https://raw.githubusercontent.com/lichess-org/lila/master/COPYING.md",
+    "https://raw.githubusercontent.com/adafruit/Adafruit-GFX-Library/master/README.md"
+   ],
+   "confidence": "medium",
+   "impact": "major",
+   "contradicts_plan": false,
+   "recommended_action": "Best option: Fabrizio draws an original 1-bit piece set tuned for 60 px e-ink squares, with solid and outline variants that read on both light and hatched dark squares, and licenses it GPL-3.0-or-later or CC BY-SA 4.0. It is a branding asset and carries no third-party constraints. Fallback: rasterise cburnett or merida (GPLv2+, so usable under v3) with attribution in THIRD-PARTY.md. Do not embed alpha, staunty, california or any of the sadsnake1 sets. For text, stay with the Adafruit GFX FreeFonts or an OFL font converted under a new name, with OFL.txt in the repo.",
+   "verification": {
+    "verdict": "confirmed",
+    "corrected_claim": "As claimed. Additionally: the cburnett set is offered by its author on Wikimedia Commons under GFDL / CC BY-SA 3.0 / BSD 3-clause / GPL v2+v3, making it the lowest-risk third-party fallback (attribution only under BSD); merida's GPLv2+ status rests on Lichess's COPYING.md alone. The GNU FreeFont origin of Adafruit's Free* fonts is not documented in the Adafruit repo (README and font headers are silent); FreeFont itself is GPLv3+ with a font exception.",
+    "reasoning": "lila COPYING.md raw lines re-read: \"public/piece/cburnett | Colin M.L. Burnett | GPLv2+\", \"public/piece/merida | Armando Hernandez Marroquin | GPLv2+\", \"public/piece/alpha | Eric Bentzen | \\\"free for personal non commercial use\\\"\", \"public/piece/leipzig | ... | \\\"freeware\\\"\", \"public/piece/companion | David L. Brown | \\\"freeware\\\"\", \"public/piece/mono | Thibault Duplessis and Colin M.L. Burnett | GPLv2+\", \"public/piece/mpchess | Maxime Chupin | GPL3v3+\", \"public/piece/shapes | flugsio | CC BY-SA 4.0\", \"public/piece/staunty | sadsnake1 | CC BY-NC-SA 4.0\", \"public/piece/pixel | therealqtpi | AGPLv3+\"; full table also shows fantasy/spatial/celtic MIT, kiwen-suwi CC BY 4.0, pirouetti and letter AGPLv3+, and california, cardinal, maestro, fresca, tatiana, gioco, dubrovny, icpieces, horsey, anarcandy all CC BY-NC-SA 4.0 (plus caliente, cooke, monarchy, disguised; xkcd CC BY-NC-SA 2.5; rhosgfx CC0; chessnut Apache-2.0; chess7 freeware). Licence-compat inferences checked at source: creativecommons.org: \"compatibility with the GPLv3 is one-way only\" (declared 8 Oct 2015). Fonts: Adafruit README contains neither 'FreeFont' nor 'GNU' (checked literally) and FreeSans9pt7b.h carries no licence/origin comment, exactly as the researcher said; gnu.org FreeFont licence: \"either version 3 of the License, or (at your option) any later version\" plus the font embedding exception. OFL FAQ: \"A change in font format normally is considered modification, and Reserved Font Names (RFNs) cannot be used\"; bundling with software requires copyright, licence notice and licence text. Additions that strengthen the fallback: Wikimedia Commons File:Chess_nlt45.svg shows the cburnett pieces are quad-licensed by the author (GFDL 1.2+, CC BY-SA 3.0, BSD 3-clause, GPL v2 and v3), so cburnett can even be taken under BSD. Caution: merida's 'GPLv2+' is Lichess's attribution; the same author's Leipzig is listed only as 'freeware', so merida's provenance is weaker than cburnett's; prefer cburnett. That the FreeMono/FreeSans/FreeSerif headers derive from GNU FreeFont is not stated anywhere in the Adafruit repo files I read; it remains the researcher's (and my) recollection.",
+    "sources": [
+     "https://raw.githubusercontent.com/lichess-org/lila/master/COPYING.md",
+     "https://raw.githubusercontent.com/adafruit/Adafruit-GFX-Library/master/README.md",
+     "https://raw.githubusercontent.com/adafruit/Adafruit-GFX-Library/master/Fonts/FreeSans9pt7b.h",
+     "https://www.gnu.org/software/freefont/license.html",
+     "https://creativecommons.org/share-your-work/licensing-considerations/compatible-licenses/",
+     "https://openfontlicense.org/ofl-faq/",
+     "https://commons.wikimedia.org/wiki/File:Chess_nlt45.svg"
+    ]
+   }
+  }
+ ],
+ "unknowns": [
+  "The CT800 V1.46 source internals are unverified, because I did not download or unpack ct800-v1.46.zip. Open points:\n  - the exact directory layout (I recall, but could not confirm, separate firmware and UCI source trees plus hardware_*.c driver files);\n  - where the \"some assembly\" lives, and whether any of it is in the engine core;\n  - the C standard and compiler flags;\n  - whether the UCI tree uses pthreads or Win32 threads;\n  - how many separate hash tables it allocates (main transposition, pawn, and possibly others);\n  - whether the 1 MB Hash minimum is a simple constant.",
+  "The exact UCI option list of V1.46. The UCI_Elo minimum and maximum, the node-rate option name and range, and the `Eval Noise [%]` range are not confirmed. The Hash range of 1-1024 MB is confirmed only for V1.20P04, from a TalkChess quote.",
+  "Whether the UCI build keeps the 250-full-move game cap of the bare-metal firmware, and whether CT800 supports Chess960 castling. I believe it does not, but this is unverified.",
+  "The actual node rate of CT800 on the ESP32-S3 at 240 MHz. Code runs from flash through a 32 KB instruction cache, and the Xtensa windowed ABI makes deep recursion costlier. It must be measured on hardware, including internal-RAM hash against PSRAM hash.",
+  "The actual stack high-water mark on Xtensa for a search of 22 plies plus 10 quiescence plies. The 26 kB figure is for Cortex-M4 Thumb-2 at 20 plies.",
+  "The duration of the UCI build's startup speed calibration on an MCU, and whether its Elo-to-node-rate mapping behaves sensibly at MCU speeds.",
+  "micro-Max itself has no explicit licence statement on H.G. Muller's page. I did not verify on what basis mcu-max relicenses it as MIT.",
+  "The licence of the FreeFont-derived fonts bundled with Adafruit GFX. I stated GNU FreeFont (GPLv3+ with a font exception) from memory; the Adafruit README does not mention it.",
+  "Whether linking Espressif's closed-source WiFi and PHY libraries into a GPL-3.0 binary is formally compliant. This is a grey area tolerated in practice, and nothing here is legal advice.",
+  "NG-Play v9.86's original licence text. CT800's GPLv3+ relicensing implies the upstream was GPL-compatible; I did not check.",
+  "MakerWorld's current rules on attaching non-model files, such as a firmware .bin, to a listing, and the full current list of selectable licences. I saw only secondary summaries."
+ ],
+ "questions_for_user": [
+  "May I download ct800-v1.46.zip (4 MB, from https://www.ct800.net/downloads/ct800-v1.46.zip) into the scratchpad to read the real source? Everything about the UCI tree layout, threading, hash allocation and the exact UCI options is inferred until then.",
+  "Who is the target player for offline mode? CT800's Elo limiter bottoms out around 1000 engine-Elo, which feels stronger against humans. Do you want extra sub-1000 levels for beginners and children, using eval noise? Should the UI show named levels (Principiante/Amatore/Club/Esperto) or an Elo slider?",
+  "Piece graphics: do you want to draw your own 1-bit piece set for the 60 px e-ink squares, which would be cleanest for GPL and good CollectiCraft branding? Or should I rasterise an existing GPL set such as cburnett, the Lichess default, or merida?",
+  "Will you, or anyone you know of, sell assembled boards or kits, or is this strictly files plus a bill of materials? Selling units triggers GPL source-offer duties for the seller and affects which MakerWorld licence you choose for the case.",
+  "Which licence do you want for the case on MakerWorld: Standard Digital File License, a CC variant, or the Exclusive program? The firmware stays GPL on GitHub either way. I need to know where binaries and links may live.",
+  "Which offline features matter beyond \"play a move\"? Options are hint move, eval bar or score, take-back, a chess clock, human-versus-human on the same board, position setup and mate-in-N puzzles. CT800's UCI output gives score and principal variation for free. Human-versus-human and the clock need the separate rules layer.",
+  "What default thinking time feels right to you on an e-ink board: for example 3 s, 10 s, or a clock-based game? It drives the battery estimate and the default level table.",
+  "Do you need Chess960 or other variants, for Lichess or offline? Standard chess only keeps castling encoding and the engine choice simple.",
+  "Are you happy for me to draft a short courtesy email to Rasmus Althoff (info@ct800.net) announcing the ESP32 port and asking whether he has porting advice or objections?"
+ ]
+}
