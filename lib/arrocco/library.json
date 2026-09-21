@@ -1,0 +1,11 @@
+{
+  "name": "arrocco",
+  "version": "0.2.0",
+  "description": "Arrocco portable core: chess rules and UI, shared by the firmware and the Mac simulator",
+  "license": "GPL-3.0-or-later",
+  "frameworks": "*",
+  "platforms": "*",
+  "dependencies": [
+    { "owner": "adafruit", "name": "Adafruit GFX Library", "version": "1.12.6" }
+  ]
+}
