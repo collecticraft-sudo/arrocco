@@ -12,7 +12,7 @@ Nome pubblico: **Arrocco — e-ink chess**, by CollectiCraft. Mai "Atlas" né "r
 - Saldatore sì, poca pratica: solo saldature passanti (header, fili nei fori). Niente pad minuscoli sotto il XIAO.
 - XIAO ESP32-S3 Plus con header già saldati.
 - Strumenti sul banco: solo calibro. Il firmware di collaudo deve quindi diagnosticare da solo e dirlo sullo schermo. Un multimetro economico va comprato (polarità batteria).
-- Download autorizzati sul Mac: toolchain e librerie PlatformIO. **Non autorizzato per ora: lo zip di CT-800** (chiedere di nuovo quando si arriva al motore).
+- Download autorizzati sul Mac: toolchain e librerie PlatformIO; il sorgente di CT800 da ct800.net (fatto il 22/09/2026, importato non modificato in `lib/ct800/upstream/`); il database dei puzzle Lichess da database.lichess.org (fatto il 22/09/2026, resta fuori dal repo: si rigenera col comando in `docs/puzzles.md`).
 
 ## Hardware
 - Pannello Good Display GDEY075T7-T01 (800×480, UC8179, touch GT911), Seeed ePaper Driver Board 114993558, XIAO ESP32-S3 Plus, LiPo 606090 4000 mAh, buzzer KY-006.
