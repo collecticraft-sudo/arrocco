@@ -19,6 +19,7 @@ class MenuScreen final : public Screen {
   Context& ctx_;
   int shownBattery_ = -2;
   bool shownUsb_ = false;
+  uint32_t shownAtMs_ = 0;      // when the footer was last painted
 };
 
 class ClockPickerScreen final : public Screen {

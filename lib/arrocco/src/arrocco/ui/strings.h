@@ -53,7 +53,8 @@ constexpr char kButtonMenu[] = "Menu";
 constexpr char kButtonPrev[] = "<";
 constexpr char kButtonNext[] = ">";
 constexpr char kButtonResult[] = "Result";
-constexpr char kReviewFmt[] = "Move %d of %d";
+constexpr char kReviewFmt[] = "%s  (%d/%d)";       // "4... Nf6  (8/31)": shown move, ply of plies
+constexpr char kReviewStartFmt[] = "Start  (0/%d)";
 
 // Promotion popup
 constexpr char kPromoteTitle[] = "Promote to";

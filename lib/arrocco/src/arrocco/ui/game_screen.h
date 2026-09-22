@@ -29,6 +29,7 @@ class GameScreen final : public Screen {
   void deselect();
   Action playMove(chess::Move m);
   Action endGame();
+  Action flagFall(chess::Color side);   // `side` ran out of time
   const char* resignLabel() const;
 
   Context& ctx_;

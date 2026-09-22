@@ -49,6 +49,7 @@ void MenuScreen::draw(Adafruit_GFX& gfx) {
   // Footer: what the platform knows about power, as of this refresh.
   shownBattery_ = ctx_.platform.batteryPercent();
   shownUsb_ = ctx_.platform.usbPowered();
+  shownAtMs_ = ctx_.platform.millis();
   char line[40];
   if (shownBattery_ < 0) {
     snprintf(line, sizeof line, "%s", str::kBatteryNoGauge);
@@ -76,11 +77,16 @@ Action MenuScreen::onTap(int16_t x, int16_t y) {
   }
 }
 
+// The footer follows the power state, but a gauge that jitters by a point must not
+// keep the panel flashing: USB changes repaint at once, the percentage only when it moved
+// by kBatteryRepaintStep and at most every kBatteryRepaintMinMs.
 Action MenuScreen::onTick(uint32_t now) {
-  (void)now;
-  if (ctx_.platform.batteryPercent() != shownBattery_ || ctx_.platform.usbPowered() != shownUsb_)
-    return Action::repaint();
-  return Action::none();
+  if (ctx_.platform.usbPowered() != shownUsb_) return Action::repaint();
+  const int battery = ctx_.platform.batteryPercent();
+  if (battery == shownBattery_ || now - shownAtMs_ < kBatteryRepaintMinMs) return Action::none();
+  if (battery < 0 || shownBattery_ < 0) return Action::repaint();     // the gauge came or went
+  const int diff = battery > shownBattery_ ? battery - shownBattery_ : shownBattery_ - battery;
+  return diff >= kBatteryRepaintStep ? Action::repaint() : Action::none();
 }
 
 // ---- clock picker -------------------------------------------------------------------------

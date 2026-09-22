@@ -61,8 +61,12 @@ void GameOverScreen::draw(Adafruit_GFX& gfx) {
   SidePanelView view;
   view.headline = resultText();
   char subline[32];
-  if (reviewing_) {
-    snprintf(subline, sizeof subline, str::kReviewFmt, game.currentPly(), game.plyCount());
+  if (reviewing_ && game.currentPly() == 0) {
+    snprintf(subline, sizeof subline, str::kReviewStartFmt, game.plyCount());
+  } else if (reviewing_) {
+    char shown[16];
+    formatMove(game, game.currentPly() - 1, shown, sizeof shown);
+    snprintf(subline, sizeof subline, str::kReviewFmt, shown, game.currentPly(), game.plyCount());
   } else {
     snprintf(subline, sizeof subline, "%s", reasonText());
   }
@@ -108,8 +112,9 @@ Action GameOverScreen::onOverlayTap(int16_t x, int16_t y) {
 Action GameOverScreen::onReviewTap(int16_t x, int16_t y) {
   chess::Game& game = ctx_.game;
   switch (sideButtonAt(x, y)) {
-    case kPrev:    return game.stepBack() ? Action::repaint() : Action::none();
-    case kNext:    return game.stepForward() ? Action::repaint() : Action::none();
+    // Browsing changes the whole board and nobody is on the clock: a natural pause.
+    case kPrev:    return game.stepBack() ? Action::pauseRepaint() : Action::none();
+    case kNext:    return game.stepForward() ? Action::pauseRepaint() : Action::none();
     case kFlip:    ctx_.flipped = !ctx_.flipped; return Action::repaint(Refresh::Full);
     case kResult:  reviewing_ = false; game.goToLatest(); return Action::repaint();
     case kNewGame: return newGame();

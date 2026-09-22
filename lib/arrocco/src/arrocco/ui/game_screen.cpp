@@ -143,7 +143,11 @@ Action GameScreen::playMove(Move m) {
   const uint32_t now = ctx_.platform.millis();
   deselect();
   mode_ = Mode::Play;
-  if (m.isNone() || !ctx_.game.play(m)) return Action::repaint();
+  if (m.isNone()) return Action::repaint();
+  // The flag fell while the finger was still on the glass: the move is not played.
+  const Color mover = ctx_.game.position().sideToMove();
+  if (ctx_.clock.timedOut(mover, now)) return flagFall(mover);
+  if (!ctx_.game.play(m)) return Action::repaint();
   ctx_.clock.moveMade(now);
   ctx_.play(Sound::Move);
   if (ctx_.game.isOver()) return endGame();
@@ -155,6 +159,12 @@ Action GameScreen::endGame() {
   ctx_.clock.stop(ctx_.platform.millis());
   ctx_.play(Sound::GameOver);
   return Action::go(ScreenId::GameOver, Refresh::Deep);
+}
+
+Action GameScreen::flagFall(Color side) {
+  ctx_.game.declareResult(side == Color::White ? chess::GameResult::BlackWins : chess::GameResult::WhiteWins,
+                          chess::GameEndReason::Timeout);
+  return endGame();
 }
 
 Action GameScreen::onPromotionTap(int16_t x, int16_t y) {
@@ -220,11 +230,7 @@ Action GameScreen::onTick(uint32_t now) {
   const GameClock& clock = ctx_.clock;
   if (!clock.enabled() || !clock.running()) return Action::none();
   const Color side = clock.runningSide();
-  if (clock.timedOut(side, now)) {
-    ctx_.game.declareResult(side == Color::White ? chess::GameResult::BlackWins : chess::GameResult::WhiteWins,
-                            chess::GameEndReason::Timeout);
-    return endGame();
-  }
+  if (clock.timedOut(side, now)) return flagFall(side);
   if (GameClock::shownSeconds(clock.remainingMs(side, now)) != shownClock_[chess::indexOf(side)])
     return Action::repaint();
   return Action::none();

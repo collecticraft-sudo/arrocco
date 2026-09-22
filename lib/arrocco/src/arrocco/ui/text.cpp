@@ -134,11 +134,10 @@ Dialog confirmDialog(const char* resignLabel) {
   d.labels[0] = resignLabel;
   d.labels[1] = str::kAgreeDraw;
   d.labels[2] = str::kCancel;
-  constexpr int16_t kW = 320;
-  constexpr int16_t kH = 40;
-  const int16_t x = static_cast<int16_t>(d.box.x + (d.box.w - kW) / 2);
+  const int16_t x = static_cast<int16_t>(d.box.x + (d.box.w - kConfirmButtonW) / 2);
   for (int i = 0; i < 3; ++i)
-    d.buttons[i] = Rect{x, static_cast<int16_t>(d.box.y + 56 + i * 48), kW, kH};
+    d.buttons[i] = Rect{x, static_cast<int16_t>(d.box.y + kConfirmButtonY0 + i * (kMinButtonH + kButtonGap)),
+                        kConfirmButtonW, kMinButtonH};
   return d;
 }
 
@@ -153,8 +152,8 @@ Dialog gameOverDialog(const char* result, const char* reason) {
   d.labels[1] = str::kGameOverReview;
   d.labels[2] = str::kButtonMenu;
   constexpr int16_t kW = 124;
-  constexpr int16_t kH = 48;
-  constexpr int16_t kGap = 8;
+  constexpr int16_t kH = kMinButtonH;
+  constexpr int16_t kGap = kButtonGap;
   const int16_t x0 = static_cast<int16_t>(d.box.x + (d.box.w - (3 * kW + 2 * kGap)) / 2);
   const int16_t y = static_cast<int16_t>(d.box.y + d.box.h - kH - 24);
   for (int i = 0; i < 3; ++i)
