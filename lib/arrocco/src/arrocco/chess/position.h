@@ -43,9 +43,10 @@ class Position {
 
   // Reads a FEN. Fields after the piece placement may be missing ("w - - 0 1" is assumed), so the
   // 4-field FENs found in perft tables and puzzle files work too.
-  // Returns false and leaves this position UNCHANGED if the text is not a FEN or describes a position
-  // the rules cannot handle: not exactly one king each, pawns on rank 1 or 8, more than 16 pieces a
-  // side, or the side NOT to move being in check.
+  // Returns false and leaves this position UNCHANGED if the text is not a FEN (clocks that are not
+  // numbers and anything after the sixth field included) or describes a position the rules cannot
+  // handle: not exactly one king each, pawns on rank 1 or 8, more than 16 pieces a side, or the
+  // side NOT to move being in check.
   // Two fields are normalised rather than rejected:
   //   - a castling right whose king or rook is not on its home square is dropped;
   //   - the en-passant square is kept only when an en-passant capture is really legal (see
@@ -152,7 +153,8 @@ class Position {
 
   // SAN -> legal move of this position, or Move::none() if it matches no legal move or more than one.
   // Reads up to the first space or NUL. Tolerant on decoration: trailing "+", "#", "!", "?" are
-  // ignored, "0-0" is accepted for "O-O", "e8Q" for "e8=Q", over-specified moves ("Ng1f3") too.
+  // ignored and so is "e.p.", "0-0" is accepted for "O-O", "e8Q" for "e8=Q", "ed5" for "exd5",
+  // over-specified moves ("Ng1f3") too. Piece letters must be upper case: "bxc3" is a pawn, "Bxc3" a bishop.
   Move parseSan(const char* text) const;
 
  private:

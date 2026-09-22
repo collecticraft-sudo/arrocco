@@ -145,9 +145,17 @@ Move Position::parseSan(const char* text) const {
     token[len] = text[len];
     ++len;
   }
-  // Check, mate and annotation marks carry no information we need.
-  while (len > 0 && (token[len - 1] == '+' || token[len - 1] == '#' || token[len - 1] == '!' || token[len - 1] == '?')) {
-    --len;
+  // Check, mate and annotation marks carry no information we need; nor does an "e.p." glued to the
+  // move ("exd6e.p."; written apart, "exd6 e.p.", it is already outside the token).
+  const auto stripMarks = [&token, &len]() {
+    while (len > 0 && (token[len - 1] == '+' || token[len - 1] == '#' || token[len - 1] == '!' || token[len - 1] == '?')) {
+      --len;
+    }
+  };
+  stripMarks();
+  if (len > 4 && token[len - 4] == 'e' && token[len - 3] == '.' && token[len - 2] == 'p' && token[len - 1] == '.') {
+    len -= 4;
+    stripMarks();
   }
   if (len < 2) return Move::none();
 

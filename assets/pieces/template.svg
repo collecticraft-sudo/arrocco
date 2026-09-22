@@ -3,7 +3,7 @@
 <!-- Arrocco piece template (56 x 56 px, 1-bit)
      Canvas 56 x 56 user units. 1 unit = 1 panel pixel = 0.204 mm on the glass.
      Only the groups "mask" and "ink" are converted; "square" and "guides" are ignored.
-     Full guide (Italian): docs/pezzi.md. File format (English): assets/pieces/README.md. -->
+     Full guide (Italian): docs/pezzi.md. Short version: assets/pieces/README.md. -->
 <svg xmlns="http://www.w3.org/2000/svg"
      xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
      xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
