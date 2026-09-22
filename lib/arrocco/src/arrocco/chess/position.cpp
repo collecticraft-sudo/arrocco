@@ -172,16 +172,21 @@ bool Position::setFen(const char* fen) {
   }
   if (*p != '\0' && !isSpace(*p)) return false;
 
-  // 5. and 6. Clocks.
+  // 5. and 6. Clocks: both optional, but what is there must be a number, and nothing may follow.
   p = skipSpaces(p);
-  if (isDigit(*p)) {
+  if (*p != '\0') {
     int value = 0;
+    if (!isDigit(*p)) return false;
     p = readNumber(p, value);
+    if (*p != '\0' && !isSpace(*p)) return false;
     next.halfmoveClock_ = static_cast<uint16_t>(value);
     p = skipSpaces(p);
-    if (isDigit(*p)) {
+    if (*p != '\0') {
+      if (!isDigit(*p)) return false;
       p = readNumber(p, value);
       next.fullmoveNumber_ = static_cast<uint16_t>(value < 1 ? 1 : value);
+      p = skipSpaces(p);
+      if (*p != '\0') return false;
     }
   }
 
