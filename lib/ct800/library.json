@@ -1,0 +1,42 @@
+{
+  "name": "ct800",
+  "version": "1.46.0",
+  "description": "CT800 V1.46 chess engine (Rasmus Althoff) with Arrocco's front end: no threads, no stdio, no heap",
+  "keywords": "chess, engine, ct800",
+  "license": "GPL-3.0-or-later",
+  "frameworks": "*",
+  "platforms": "*",
+  "authors": [
+    {
+      "name": "Rasmus Althoff",
+      "url": "https://www.ct800.net",
+      "maintainer": false
+    }
+  ],
+  "build": {
+    "srcDir": ".",
+    "includeDir": "port",
+    "srcFilter": [
+      "-<*>",
+      "+<upstream/application-uci/search.c>",
+      "+<upstream/application-uci/eval.c>",
+      "+<upstream/application-uci/move_gen.c>",
+      "+<upstream/application-uci/hashtables.c>",
+      "+<upstream/application-uci/book.c>",
+      "+<upstream/application-uci/bookdata.c>",
+      "+<upstream/application-uci/kpk.c>",
+      "+<upstream/application-uci/kpk_table.c>",
+      "+<upstream/application-uci/util.c>",
+      "+<port/ct800_glue.c>"
+    ],
+    "flags": [
+      "-I upstream/application-uci",
+      "-I port",
+      "-include ct800_memory.h",
+      "-fno-strict-aliasing",
+      "-fno-strict-overflow",
+      "-fno-common"
+    ],
+    "libArchive": true
+  }
+}

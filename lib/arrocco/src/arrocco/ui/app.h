@@ -24,7 +24,14 @@ namespace arrocco::ui {
 
 class ChessApp final : public arrocco::App {
  public:
-  explicit ChessApp(Platform& platform);
+  // `engine` may be null: the build then has no engine, and the menu entry says so.
+  // It must outlive the app, and the app is the only thing that ever calls it.
+  explicit ChessApp(Platform& platform, Engine* engine = nullptr);
+
+  // Attaches the engine after construction, which is what the firmware needs: the app
+  // is a static object, but the engine cannot claim its PSRAM or start its task before
+  // setup() has run. Call it before begin(); a null pointer greys the menu entry.
+  void setEngine(Engine* engine) { ctx_.engine = engine; }
 
   void begin() override;
   void onTouch(const TouchEvent& e) override;
@@ -48,6 +55,7 @@ class ChessApp final : public arrocco::App {
   MenuScreen menu_;
   ClockPickerScreen clockPicker_;
   SettingsScreen settings_;
+  EngineSetupScreen engineSetup_;
   GameScreen game_screen_;
   GameOverScreen gameOver_;
   ScreenId screenId_ = ScreenId::Menu;

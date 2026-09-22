@@ -18,6 +18,30 @@ constexpr char kBatteryFmt[] = "Battery %d%%";
 constexpr char kBatteryNoGauge[] = "Battery: no gauge";
 constexpr char kUsbPowered[] = "USB power";
 
+// Play vs engine — setup screen
+constexpr char kEngineTitle[] = "Play vs engine";
+constexpr char kEngineSideWhite[] = "You play White";
+constexpr char kEngineSideBlack[] = "You play Black";
+constexpr char kEngineSideRandom[] = "Colour drawn at the start";
+constexpr char kEngineLevelFmt[] = "Level %d: %s";
+constexpr char kEngineStart[] = "Choose the clock and start";
+constexpr char kEngineHint[] = "Tap a line to change it";
+constexpr char kEngineMissing[] = "No engine in this build";
+
+// Engine level names. What strength each one stands for is in arrocco/engine.h.
+constexpr char kLevel1[] = "Beginner";
+constexpr char kLevel2[] = "Very easy";
+constexpr char kLevel3[] = "Easy";
+constexpr char kLevel4[] = "Casual";
+constexpr char kLevel5[] = "Club";
+constexpr char kLevel6[] = "Strong";
+constexpr char kLevel7[] = "Tough";
+constexpr char kLevel8[] = "Expert";
+
+// Engine, during the game
+constexpr char kEngineThinking[] = "Thinking...";
+constexpr char kEngineLevelLineFmt[] = "Level %d: %s";   // under "Thinking..."
+
 // Clock picker
 constexpr char kClockTitle[] = "Game clock";
 constexpr char kClockOff[] = "No clock";

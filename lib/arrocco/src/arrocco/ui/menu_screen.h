@@ -42,4 +42,16 @@ class SettingsScreen final : public Screen {
   Context& ctx_;
 };
 
+// Play vs engine: pick a colour and a level, then go on to the clock picker, which is
+// what actually starts the game — exactly as "Two players" does.
+class EngineSetupScreen final : public Screen {
+ public:
+  explicit EngineSetupScreen(Context& ctx) : ctx_(ctx) {}
+  void draw(Adafruit_GFX& gfx) override;
+  Action onTap(int16_t x, int16_t y) override;
+
+ private:
+  Context& ctx_;
+};
+
 }  // namespace arrocco::ui

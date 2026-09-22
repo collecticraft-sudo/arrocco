@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "arrocco/chess/game.h"
+#include "arrocco/engine.h"
 #include "arrocco/platform.h"
 #include "arrocco/ui/clock.h"
 
@@ -12,7 +13,11 @@ class Adafruit_GFX;
 
 namespace arrocco::ui {
 
-enum class ScreenId : uint8_t { Menu, ClockPicker, Settings, Game, GameOver };
+enum class ScreenId : uint8_t { Menu, ClockPicker, Settings, EngineSetup, Game, GameOver };
+
+// Which colour the human takes against the engine. Random is drawn when the game
+// starts, not before: the setup screen keeps saying "drawn at the start" until then.
+enum class HumanSide : uint8_t { White, Black, Random };
 
 struct Settings {
   bool flipByDefault = false;
@@ -54,16 +59,34 @@ enum class Sound : uint8_t { Select, Move, GameOver };
 
 // Shared by every screen. The Game (~25 KB) lives in the App, in static storage.
 struct Context {
-  Context(Platform& p, chess::Game& g) : platform(p), game(g) {}
+  Context(Platform& p, chess::Game& g, Engine* e) : platform(p), game(g), engine(e) {}
   Platform& platform;
   chess::Game& game;
+  Engine* engine;              // nullptr in a build without one: the menu entry stays greyed
   Settings settings;
   GameClock clock;
   bool flipped = false;        // orientation of the game being played
   bool started = false;        // a game was set up on this power cycle
+
+  // ---- play vs engine. `vsEngine` describes the game being SET UP and then the one
+  // being played; `engineColor` is only meaningful once startNewGame() has resolved it.
+  bool vsEngine = false;
+  int engineLevel = 0;                                  // index into kEngineLevels
+  HumanSide humanSide = HumanSide::White;
+  chess::Color engineColor = chess::Color::Black;
+  bool engineAvailable() const { return engine != nullptr; }
+  // The engine is the side to move of a live engine game: its turn to think.
+  bool engineToMove() const {
+    return vsEngine && engine != nullptr && started && !game.isOver() &&
+           game.atLatest() && game.position().sideToMove() == engineColor;
+  }
+
   bool gameInProgress() const { return started && !game.isOver(); }
   void startNewGame(uint32_t now);
   void play(Sound s);          // honours settings.sound
+
+ private:
+  uint32_t rand_ = 0;          // for HumanSide::Random; seeded from the clock
 };
 
 class Screen {

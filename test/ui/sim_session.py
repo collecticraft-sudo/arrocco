@@ -272,8 +272,10 @@ def main():
     check(menu.ink(MENU_BTN(0)) == 0, "menu: no 'Resume' button before any game")
     check(menu.ink((0, 0, 800, 90)) > 500, "menu: title present")
 
-    # Greyed button does nothing: no frame.
-    s.step("menu: tap greyed 'Play vs engine'", *center(MENU_BTN(2)), expect_frames=0)
+    # Still-greyed buttons do nothing: no frame. ('Play vs engine' is live now and has
+    # its own session, test/ui/engine_session.py.)
+    s.step("menu: tap greyed 'Puzzles'", *center(MENU_BTN(3)), expect_frames=0)
+    s.step("menu: tap greyed 'Lichess'", *center(MENU_BTN(4)), expect_frames=0)
 
     # ---- 2. Two players -> clock picker -> game ------------------------------------------------
     picker = s.step("menu: tap 'Two players'", *center(MENU_BTN(MENU_SLOT_TWO_PLAYERS)), kind="full")[0]

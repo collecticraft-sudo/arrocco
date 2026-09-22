@@ -9,6 +9,7 @@
 
 #include "arrocco/ui/app.h"
 #include "config.h"
+#include "esp32_engine.h"
 #include "esp32_platform.h"
 #include "gauge.h"
 #include "gt911.h"
@@ -25,6 +26,7 @@ constexpr uint32_t kStatMs = 30000;
 
 Esp32Platform s_platform;
 arrocco::ui::ChessApp s_app(s_platform); // .bss: never on a task stack
+                                         // the engine is attached in setup(): it needs PSRAM
 
 // touch state machine (mirrors hwtest): Down on the first fresh frame with one finger,
 // Move while it stays down and the point moved, Up on the release frame or when the
@@ -181,7 +183,8 @@ void statusReport() {
   char headline[64];
   gt911::headline(headline, sizeof(headline));
   logLine("STAT  heap %lu KB, PSRAM %lu KB | refreshes %lu partial (last %lu ms) %lu full (last %lu ms), "
-          "panel %s, powered %d | %s, frames %lu, i2c errors %lu | %s | events %lu, presents %lu",
+          "panel %s, powered %d | %s, frames %lu, i2c errors %lu | %s | events %lu, presents %lu"
+          " | engine stack free %lu B",
           static_cast<unsigned long>(ESP.getFreeHeap() / 1024UL),
           static_cast<unsigned long>(ESP.getFreePsram() / 1024UL),
           static_cast<unsigned long>(st.partialTotal), static_cast<unsigned long>(st.lastPartialMs),
@@ -189,7 +192,8 @@ void statusReport() {
           st.responding ? "responding" : "NOT RESPONDING", st.powered ? 1 : 0, headline,
           static_cast<unsigned long>(gt911::frames()), static_cast<unsigned long>(i2cbus::errors()),
           gauge::text(), static_cast<unsigned long>(s_events),
-          static_cast<unsigned long>(s_platform.presents()));
+          static_cast<unsigned long>(s_platform.presents()),
+          static_cast<unsigned long>(arrocco_app::engineStackFreeBytes()));
 }
 
 } // namespace
@@ -214,6 +218,16 @@ void setup() {
             static_cast<unsigned long>(cfg::kTouchRetryMs));
   i2cbus::scan();
   gauge::poll(true);
+
+  // The engine claims its hash and starts its search task here, not at static init:
+  // PSRAM is only usable once Arduino has brought it up. Without it the board still
+  // plays two-player games, and the menu entry stays greyed.
+  if (arrocco_app::engineBegin()) {
+    s_app.setEngine(arrocco_app::engine());
+    logLine("ENGI  CT800 V1.46 ready: hash %s", arrocco_app::engineHashInfo());
+  } else {
+    logLine("ENGI  no engine: %s ('Play vs engine' stays greyed)", arrocco_app::engineHashInfo());
+  }
 
   const uint32_t now = millis();
   s_lastRetryMs = now;
