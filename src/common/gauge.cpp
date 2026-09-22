@@ -13,6 +13,7 @@ constexpr uint8_t kRegSoc = 0x04;   // 16-bit big-endian, 1/256 % per bit
 
 bool s_present = false;
 char s_text[27] = "no gauge";
+int s_percent = -1;
 
 } // namespace
 
@@ -24,6 +25,7 @@ void poll(bool verbose) {
               i2cbus::read8(kAddr, kRegSoc, s, 2);
   if (!s_present) {
     snprintf(s_text, sizeof(s_text), "no gauge");
+    s_percent = -1;
     if (verbose || wasPresent) logLine("GAUGE no MAX17048 at 0x36 (optional)");
     return;
   }
@@ -31,6 +33,7 @@ void poll(bool verbose) {
   const uint32_t rawSoc = static_cast<uint32_t>((s[0] << 8) | s[1]);
   const uint32_t millivolts = rawV * 5u / 64u;   // 78.125 uV = 5/64 mV
   const uint32_t tenths = rawSoc * 10u / 256u;   // percent x 10
+  s_percent = static_cast<int>(tenths / 10u > 100u ? 100u : tenths / 10u);
   snprintf(s_text, sizeof(s_text), "gauge %lu.%02luV %lu.%lu%%",
            static_cast<unsigned long>(millivolts / 1000u),
            static_cast<unsigned long>((millivolts % 1000u) / 10u),
@@ -42,5 +45,6 @@ void poll(bool verbose) {
 
 bool present() { return s_present; }
 const char* text() { return s_text; }
+int percent() { return s_percent; }
 
 } // namespace gauge
