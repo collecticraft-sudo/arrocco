@@ -3,5 +3,7 @@
 #pragma once
 #include <Arduino.h>
 
-// Uses one static buffer: call it from the main task only, never from an ISR.
+// Builds the line on the caller's own stack (200 bytes) and serialises the write with a
+// mutex, so any task may call it - the network code logs from four. Never from an ISR:
+// it takes a mutex and writes to USB.
 void logLine(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
