@@ -8,23 +8,33 @@
 
 namespace panel {
 
-Epd display(GxEPD2_750_GDEY075T7(cfg::kEpdCs, cfg::kEpdDc, cfg::kEpdRst, cfg::kEpdBusy));
+Epd display(Driver(cfg::kEpdCs, cfg::kEpdDc, cfg::kEpdRst, cfg::kEpdBusy));
 
 namespace {
 Stats s_stats = {0, 0, 0, 0, 0, 0, false, true, BusyPin::Unknown};
+uint32_t s_busyTimeoutUs = kBusyTimeoutMs * 1000u;
 
 // Time really spent waiting on BUSY. The total time of display() cannot tell a dead
 // panel from a live one: pushing the 48,000-byte buffer over SPI takes 100+ ms per
 // pass even with the FPC unplugged. The library calls this only while BUSY is active.
 // Called about once a millisecond while a wait lasts: summing the short gaps between
 // calls gives the time inside the waits and leaves out the SPI transfers between them.
+// The longest single wait tells whether one of them ran into the library's timeout.
 uint32_t s_busyUs = 0;
 uint32_t s_busyLastUs = 0;
+uint32_t s_waitUs = 0;    // the wait in progress
+uint32_t s_maxWaitUs = 0; // the longest wait of this refresh
 
 void onBusy(const void*) { // no SPI, no drawing, no logging in here
   const uint32_t now = micros();
   const uint32_t gap = now - s_busyLastUs;
-  if (gap < 5000) s_busyUs += gap;
+  if (gap < 5000) {
+    s_busyUs += gap;
+    s_waitUs += gap;
+    if (s_waitUs > s_maxWaitUs) s_maxWaitUs = s_waitUs;
+  } else {
+    s_waitUs = 0; // a new wait: the gap before it was an SPI transfer
+  }
   s_busyLastUs = now;
   delay(1);
 }
@@ -73,12 +83,17 @@ void begin() {
 uint32_t refresh(Kind kind, uint32_t drawMs) {
   const bool powerOnIncluded = !s_stats.powered;
   s_busyUs = 0;
+  s_waitUs = 0;
+  s_maxWaitUs = 0;
   s_busyLastUs = micros() - 1000000u; // the first call must not count the gap before it
   const uint32_t t0 = millis();
   display.display(kind == Kind::Partial);
   const uint32_t ms = millis() - t0;
   const uint32_t busyMs = s_busyUs / 1000u;
   s_stats.lastBusyMs = busyMs;
+  // The library stops a wait at the timeout: a single wait within 50 ms of it is one that
+  // ran into it. With the 10 s default this is implied by the total-time rule below.
+  const bool timedOut = s_maxWaitUs + 50000u >= s_busyTimeoutUs;
 
   if (kind == Kind::Partial) {
     s_stats.lastPartialMs = ms;
@@ -91,10 +106,10 @@ uint32_t refresh(Kind kind, uint32_t drawMs) {
     ++s_stats.fullTotal;
     s_stats.powered = false; // the library powers the panel off after a full refresh
   }
-  s_stats.responding = (busyMs >= cfg::kRefreshTooFastMs && ms <= cfg::kRefreshTooSlowMs);
+  s_stats.responding = (busyMs >= cfg::kRefreshTooFastMs && ms <= cfg::kRefreshTooSlowMs && !timedOut);
 
   logLine("REFRESH %s #%lu: %lu ms, of which BUSY wait %lu ms (draw %lu ms, power-on %s), since full %u/%u",
-          kind == Kind::Partial ? "partial" : "full",
+          kind == Kind::Partial ? "partial" : kind == Kind::Full ? "full" : "deep",
           static_cast<unsigned long>(s_stats.partialTotal + s_stats.fullTotal),
           static_cast<unsigned long>(ms), static_cast<unsigned long>(busyMs),
           static_cast<unsigned long>(drawMs), powerOnIncluded ? "included" : "not needed",
@@ -118,6 +133,14 @@ void powerOff() {
   display.powerOff();
   s_stats.powered = false;
   logLine("PANEL power off after idle (%lu ms)", static_cast<unsigned long>(millis() - t0));
+}
+
+void setBusyTimeoutMs(uint32_t ms) {
+  const uint32_t us = ms * 1000u;
+  if (us == s_busyTimeoutUs) return;
+  s_busyTimeoutUs = us;
+  display.epd2.setBusyTimeoutUs(us);
+  logLine("PANEL BUSY timeout now %lu ms per wait", static_cast<unsigned long>(ms));
 }
 
 const Stats& stats() { return s_stats; }

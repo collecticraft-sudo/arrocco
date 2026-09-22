@@ -6,6 +6,16 @@
   "frameworks": "*",
   "platforms": "*",
   "dependencies": [
-    { "owner": "adafruit", "name": "Adafruit GFX Library", "version": "1.12.6" }
-  ]
+    {
+      "owner": "adafruit",
+      "name": "Adafruit GFX Library",
+      "version": "1.12.6"
+    }
+  ],
+  "build": {
+    "flags": [
+      "-Wall",
+      "-Wextra"
+    ]
+  }
 }

@@ -9,5 +9,6 @@ namespace gauge {
 void poll(bool verbose);
 bool present();
 const char* text(); // "gauge 3.97V 84.2%" or "no gauge"
+int percent();      // last state of charge, 0..100, or -1 when the gauge is absent
 
 } // namespace gauge
