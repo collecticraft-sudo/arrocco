@@ -1,22 +1,38 @@
 # Set di pezzi CollectiCraft
 
-Set originale, disegnato per caselle da 56 px su e-ink a 1 bit. Nessun vincolo di licenza da terzi: è nostro, GPL-3.0-or-later come il resto del firmware.
+Pezzi a 1 bit per caselle da 56 px su e-ink. Nostri, GPL-3.0-or-later come il resto del firmware.
 
-- `draw_pieces.py` — la fonte di verità. Ogni pezzo è un insieme di forme geometriche; lo script ne ricava la maschera bianca (l'alone che stacca il pezzo dalle caselle tratteggiate), il contorno dei pezzi bianchi e la sagoma piena dei neri.
-- `svg/` — gli stessi pezzi in SVG, un file per tipo, con i gruppi `mask` e `ink`. Da qui puoi ridisegnarli a mano.
+## Come nasce il set
+
+Due strade, stesso risultato finale (tre bitmap per pezzo: maschera bianca, contorno per i bianchi, sagoma piena per i neri).
+
+1. **`trace_reference.py` — quella in uso.** Parte da `reference/staunton-row.png`, un'immagine generata con il prompt in `PROMPT-riferimento.md`: sei sagome Staunton in fila, a **altezze reali**. Lo script le separa, le riscala una per una e le rimette tutte sulla stessa linea di base.
+
+   La normalizzazione è il punto. Un'immagine generata dà il re alto il doppio del pedone, ma sulla scacchiera ogni pezzo deve riempire la sua casella. Quindi: l'altezza segue `HEIGHTS` (il re riempie, il pedone resta il più basso ma non sparisce), e la larghezza è scalata a parte finché **la base misura `BASE_W` px uguale per tutti**. È la base che tiene insieme visivamente un set. Un fattore di larghezza fisso invece deforma, perché i sei disegni di riferimento non hanno lo stesso rapporto.
+
+2. **`draw_pieces.py` — il set disegnato a mano.** Ogni pezzo è un'unione di poligoni e cerchi scritti nel codice. Più grossolano, ma non dipende da nessuna immagine. Resta qui come riserva e perché contiene il rasterizzatore che usano entrambi.
+
+Tutti e due rasterizzano a 4× e tagliano al 50 %, che è quello che farà il pannello: **l'anteprima è quello che vedrai sul vetro.**
+
+## File
+
 - `piece_bitmaps.h` — generato, è quello che finisce nel firmware. Non modificarlo a mano.
 - `preview-set.png`, `preview-board.png` — anteprime generate.
-- `template.svg` — griglia 56×56 con l'area di sicurezza, se parti da zero.
+- `reference/staunton-row.png` — il riferimento di partenza.
+- `PROMPT-riferimento.md` — il prompt per rigenerare il riferimento.
+- `svg/`, `template.svg` — i pezzi disegnati a mano in SVG, se vuoi ripartire da lì.
 
 ## Rigenerare
 
 ```
-python3 draw_pieces.py --sheet preview-set.png --board preview-board.png \
-                       --header piece_bitmaps.h --svg svg
+python3 trace_reference.py --sheet preview-set.png --board preview-board.png \
+                           --header piece_bitmaps.h
 ```
 
-Poi copia `piece_bitmaps.h` dove il firmware lo legge (vedi `docs/pezzi.md`).
+Con un riferimento nuovo: `--reference reference/tuo-file.png`. Serve un PNG a 8 bit non interlacciato, sfondo chiaro, sei pezzi neri in fila nell'ordine re, donna, torre, alfiere, cavallo, pedone.
 
-## Se li ridisegni tu
+## Se qualcosa non torna
 
-Le regole che contano sono in `docs/pezzi.md`: nero e bianco pieni senza grigi, tratto minimo 2 px, il pezzo dentro 48×48 con 4 px di margine. Lo script rasterizza a 4× e taglia al 50 %, esattamente come farà il pannello: quello che vedi nell'anteprima è quello che vedrai sul vetro.
+- **Un pezzo troppo alto o troppo basso**: `HEIGHTS` in `trace_reference.py`.
+- **Set troppo stretto o troppo largo**: `BASE_W`.
+- **Lo script non trova sei pezzi**: le sagome nel riferimento si toccano, oppure lo sfondo non è abbastanza chiaro. Alza la soglia in `to_binary`.
