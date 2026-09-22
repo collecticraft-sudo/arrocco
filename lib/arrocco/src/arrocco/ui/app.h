@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Arrocco UI — ChessApp: the arrocco::App the firmware and the simulator run. Owns the
+// Game (static storage, ~25 KB), the screens, the settings and the refresh policy.
+//
+// Refresh policy ("few flashes", docs/decisioni.md): ONE present() per user-visible
+// event, never two for one tap. Partial normally; Full when the screen changes, or at
+// a natural pause (a move was just played) once partialsSinceFull reached the
+// threshold; Deep at game start and game end. panelOff() after kPanelOffAfterMs
+// without touches, from tick().
+//
+// Stack: the firmware calls this from an 8 KB loop task. Nothing here holds a large
+// local; the frame buffer lives in the platform, the Game in this object.
+#pragma once
+#include <cstdint>
+
+#include "arrocco/chess/game.h"
+#include "arrocco/platform.h"
+#include "arrocco/ui/game_over_screen.h"
+#include "arrocco/ui/game_screen.h"
+#include "arrocco/ui/menu_screen.h"
+#include "arrocco/ui/screen.h"
+
+namespace arrocco::ui {
+
+class ChessApp final : public arrocco::App {
+ public:
+  explicit ChessApp(Platform& platform);
+
+  void begin() override;
+  void onTouch(const TouchEvent& e) override;
+  void tick() override;
+
+  // For tests and the simulator's status line.
+  ScreenId currentScreen() const { return screenId_; }
+  uint8_t partialsSinceFull() const { return partialsSinceFull_; }
+  const chess::Game& game() const { return game_; }
+
+ private:
+  Screen& current();
+  void apply(const Action& action);
+  Refresh resolve(const Action& action) const;
+  void present(Refresh kind);
+  uint8_t fullThreshold() const;
+
+  Platform& platform_;
+  chess::Game game_;
+  Context ctx_;
+  MenuScreen menu_;
+  ClockPickerScreen clockPicker_;
+  SettingsScreen settings_;
+  GameScreen game_screen_;
+  GameOverScreen gameOver_;
+  ScreenId screenId_ = ScreenId::Menu;
+
+  bool touchDown_ = false;
+  int16_t downX_ = 0;
+  int16_t downY_ = 0;
+  uint32_t lastActivityMs_ = 0;   // last touch or present()
+  bool panelOffSent_ = true;
+  uint8_t partialsSinceFull_ = 0;
+};
+
+}  // namespace arrocco::ui
