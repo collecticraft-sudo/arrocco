@@ -49,6 +49,14 @@ HEIGHTS = {'K': 1.00, 'Q': 0.97, 'B': 0.93, 'N': 0.92, 'R': 0.86, 'P': 0.76}
 BASE_W = 31.0
 ORDER = ('K', 'Q', 'R', 'B', 'N', 'P')   # the order the pieces appear in the reference
 
+# Every piece in the reference has a white rule just above the bottom plinth, and on most
+# of them it reads as a moulding line. On the king and the queen it does not: their stem
+# is narrow where it meets a wide base, so the gap makes the piece look cut in half. For
+# those two the gap is closed before scaling - and only that one, between 55 % and 90 %
+# of the height, so the crown line higher up and the plinth line below both survive.
+CLOSE_BASE_GAP = ('K', 'Q')
+GAP_BAND = (0.55, 0.90)
+
 
 # ---------------------------------------------------------------- PNG in
 
@@ -150,6 +158,37 @@ def segment(grid, w, h, expect=6, min_ink=40):
     return boxes
 
 
+def close_base_gap(grid, box):
+    """Bridge the white rule between body and base: for every column that has ink on both
+    sides of the gap, fill the gap. Columns where only the base is present stay empty, so
+    the base keeps its outline."""
+    x0, x1, y0, y1 = box
+    height = y1 - y0 + 1
+    lo = y0 + int(height * GAP_BAND[0])
+    hi = y0 + int(height * GAP_BAND[1])
+    gaps, run = [], None
+    for y in range(lo, hi + 1):
+        if sum(grid[y][x0:x1 + 1]) == 0:
+            if run is None:
+                run = y
+        elif run is not None:
+            gaps.append((run, y - 1)); run = None
+    if run is not None:
+        gaps.append((run, hi))
+    filled = 0
+    for top, bottom in gaps:
+        if top == y0 or bottom >= y1:
+            continue
+        above, below = grid[top - 1], grid[bottom + 1]
+        for y in range(top, bottom + 1):
+            row = grid[y]
+            for x in range(x0, x1 + 1):
+                if above[x] and below[x]:
+                    row[x] = 1
+                    filled += 1
+    return filled
+
+
 # ---------------------------------------------------------------- rescale
 
 def place(grid, box, letter):
@@ -201,6 +240,8 @@ def build(reference):
     boxes = segment(grid, w, h)
     pieces = {}
     for letter, box in zip(ORDER, boxes):
+        if letter in CLOSE_BASE_GAP:
+            close_base_gap(grid, box)
         pieces[letter] = derive(place(grid, box, letter))
     return pieces, boxes
 
