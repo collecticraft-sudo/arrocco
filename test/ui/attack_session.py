@@ -143,6 +143,7 @@ def main():
     check(fr.ink(square_rect("h8")) > 200, "queen on h8")
     check(fr.ink((square_rect("h7")[0] + 12, square_rect("h7")[1] + 12, 32, 32)) == 0, "h7 empty after h8=Q")
     check(fr.region(SUBLINE) != plain.region(SUBLINE), "subline shows the promotion")
+    e7_by_piece = {}
     for choice, name, gives_check in [(3, "Knight", True), (1, "Rook", False), (2, "Bishop", False)]:
         fr = ses.step("Undo the promotion", *center(SIDE_BTN(BTN_UNDO)))[0]
         check(fr.region((16, 16, 448, 448)) == plain.region((16, 16, 448, 448)), "board restored by Undo")
@@ -152,8 +153,13 @@ def main():
         fr = ses.step("capture-promotion: " + name, *center(PROMO_BTN(choice)), kind="partial", allow_full_upgrade=True)[0]
         check(fr.ink((square_rect("h7")[0] + 12, square_rect("h7")[1] + 12, 32, 32)) == 0, "h7 empty after =" + name)
         check(fr.ink(square_rect("g8")) > 200, "new piece on g8 (" + name + ")")
-        ring = fr.ink(square_rect("e7")) > plain.ink(square_rect("e7")) + 100
-        check(ring == gives_check, "check ring on the e7 king: %s (expected %s)" % (ring, gives_check))
+        # The e7 king is in check only after the knight promotion. Counting ink on the
+        # square does not show that: the king's white halo removes more hatch than the
+        # ring adds. Compare the three promotions against each other instead - same
+        # square, same king, the only difference is the ring.
+        e7_by_piece[name] = fr.region(square_rect("e7"))
+    check(e7_by_piece["Rook"] == e7_by_piece["Bishop"], "e7 identical when nothing gives check")
+    check(e7_by_piece["Knight"] != e7_by_piece["Rook"], "check ring drawn on the e7 king")
 
     # ---- Menu with a game in progress, Resume, then Draw by agreement -------------------------
     ses.step("Menu", *center(SIDE_BTN(BTN_MENU)), kind="full")
