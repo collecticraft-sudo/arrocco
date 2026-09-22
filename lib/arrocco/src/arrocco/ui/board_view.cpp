@@ -53,16 +53,18 @@ void drawSquare(Adafruit_GFX& gfx, const chess::Position& pos, const BoardMarks&
       gfx.drawRect(static_cast<int16_t>(r.x + inset), static_cast<int16_t>(r.y + inset),
                    static_cast<int16_t>(r.w - 2 * inset), static_cast<int16_t>(r.h - 2 * inset), kBlack);
 
-  // Rings go under the piece, on a white disc, so they read on hatched squares too.
+  // A ring goes behind the piece: white disc, then the piece's own white halo, then the
+  // ring, then the piece ink. Drawing the ring before the halo would let the halo - which
+  // reaches 2 px past a piece that already fills the square - wipe most of it out.
   const bool target = marks.targets.contains(s);
-  if (s == marks.checkedKing) {
-    gfx.fillCircle(r.cx(), r.cy(), kCheckRingRadius, kWhite);
-    drawRing(gfx, r.cx(), r.cy(), kCheckRingRadius, kCheckRingWidth);
-  } else if (target && !piece.isNone()) {
-    gfx.fillCircle(r.cx(), r.cy(), kTargetRingRadius, kWhite);
-    drawRing(gfx, r.cx(), r.cy(), kTargetRingRadius, kTargetRingWidth);
-  }
-  drawPiece(gfx, r.x, r.y, piece);
+  const int16_t ringRadius = (s == marks.checkedKing)      ? kCheckRingRadius
+                             : (target && !piece.isNone()) ? kTargetRingRadius
+                                                           : 0;
+  const int16_t ringWidth = (s == marks.checkedKing) ? kCheckRingWidth : kTargetRingWidth;
+  if (ringRadius != 0) gfx.fillCircle(r.cx(), r.cy(), ringRadius, kWhite);
+  drawPieceHalo(gfx, r.x, r.y, piece);
+  if (ringRadius != 0) drawRing(gfx, r.cx(), r.cy(), ringRadius, ringWidth);
+  drawPieceInk(gfx, r.x, r.y, piece);
   if (target && piece.isNone()) {
     gfx.fillCircle(r.cx(), r.cy(), static_cast<int16_t>(kTargetDotRadius + 2), kWhite);
     gfx.fillCircle(r.cx(), r.cy(), kTargetDotRadius, kBlack);
