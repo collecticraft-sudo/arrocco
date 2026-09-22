@@ -53,17 +53,20 @@ void drawSquare(Adafruit_GFX& gfx, const chess::Position& pos, const BoardMarks&
       gfx.drawRect(static_cast<int16_t>(r.x + inset), static_cast<int16_t>(r.y + inset),
                    static_cast<int16_t>(r.w - 2 * inset), static_cast<int16_t>(r.h - 2 * inset), kBlack);
 
-  drawPiece(gfx, r.x, r.y, piece);
-
-  if (marks.targets.contains(s)) {
-    if (piece.isNone()) {
-      gfx.fillCircle(r.cx(), r.cy(), static_cast<int16_t>(kTargetDotRadius + 2), kWhite);
-      gfx.fillCircle(r.cx(), r.cy(), kTargetDotRadius, kBlack);
-    } else {
-      drawRing(gfx, r.cx(), r.cy(), kTargetRingRadius, kTargetRingWidth);
-    }
+  // Rings go under the piece, on a white disc, so they read on hatched squares too.
+  const bool target = marks.targets.contains(s);
+  if (s == marks.checkedKing) {
+    gfx.fillCircle(r.cx(), r.cy(), kCheckRingRadius, kWhite);
+    drawRing(gfx, r.cx(), r.cy(), kCheckRingRadius, kCheckRingWidth);
+  } else if (target && !piece.isNone()) {
+    gfx.fillCircle(r.cx(), r.cy(), kTargetRingRadius, kWhite);
+    drawRing(gfx, r.cx(), r.cy(), kTargetRingRadius, kTargetRingWidth);
   }
-  if (s == marks.checkedKing) drawRing(gfx, r.cx(), r.cy(), kCheckRingRadius, 2);
+  drawPiece(gfx, r.x, r.y, piece);
+  if (target && piece.isNone()) {
+    gfx.fillCircle(r.cx(), r.cy(), static_cast<int16_t>(kTargetDotRadius + 2), kWhite);
+    gfx.fillCircle(r.cx(), r.cy(), kTargetDotRadius, kBlack);
+  }
 }
 
 // Coordinates live in the 16 px gutters: ranks on the left, files under the board. The

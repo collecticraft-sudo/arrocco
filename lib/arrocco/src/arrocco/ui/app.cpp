@@ -28,6 +28,7 @@ int16_t absDiff(int16_t a, int16_t b) { return static_cast<int16_t>(a > b ? a - 
 // ---- Context ----------------------------------------------------------------------------
 
 void Context::startNewGame(uint32_t now) {
+  started = true;
   game.newGame();
   clock.reset(settings.clockPreset);
   clock.start(chess::Color::White, now);
@@ -126,6 +127,7 @@ void ChessApp::onTouch(const TouchEvent& e) {
       touchDown_ = true;
       downX_ = e.x;
       downY_ = e.y;
+      downMs_ = e.ms;
       break;
     case TouchEvent::Move:
       break;
@@ -141,9 +143,13 @@ void ChessApp::onTouch(const TouchEvent& e) {
 }
 
 void ChessApp::tick() {
-  // Never start a refresh under a finger: it would swallow the tap.
-  if (touchDown_) return;
   const uint32_t now = platform_.millis();
+  // Never start a refresh under a finger: it would swallow the tap. A finger that never
+  // lifts (a missed Up from the touch controller) must not freeze the clock forever.
+  if (touchDown_) {
+    if (now - downMs_ < kTouchHoldMaxMs) return;
+    touchDown_ = false;
+  }
   const Action action = current().onTick(now);
   if (action.kind != Action::Kind::None) {
     apply(action);

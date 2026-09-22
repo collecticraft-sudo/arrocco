@@ -28,10 +28,12 @@ constexpr int16_t kGutter = 16;            // rank letters on the left, file let
 // Markers, all inside one square.
 constexpr int16_t kSelectFrame = 3;        // selected piece: 3 px frame
 constexpr int16_t kTargetDotRadius = 7;    // legal target on an empty square
-constexpr int16_t kTargetRingRadius = 25;  // legal capture: ring around the piece
+constexpr int16_t kTargetRingRadius = 26;  // legal capture: ring around the piece
 constexpr int16_t kTargetRingWidth = 3;
 constexpr int16_t kLastMoveCorner = 8;     // corner triangles on from/to squares
-constexpr int16_t kCheckRingRadius = 27;   // king in check: ring hugging the halo
+constexpr int16_t kCheckRingRadius = 27;   // king in check: ring just outside the halo
+constexpr int16_t kCheckRingWidth = 3;
+// Both rings stand on a white disc: a black ring on a hatched square would vanish.
 
 // ---- side column (x = 480..799) ----------------------------------------------------
 constexpr int16_t kSideX = 480;
@@ -44,18 +46,21 @@ constexpr int16_t kClockLabelBaseline = 110;
 constexpr int16_t kClockBaseline = 148;
 constexpr int16_t kClockColumn2X = 640;
 constexpr int16_t kDivider2Y = 164;
-constexpr int16_t kMoveListBaseline0 = 188;
+constexpr int16_t kMoveListBaseline0 = 184;
 constexpr int16_t kMoveListRowH = 20;
 constexpr int16_t kMoveListRows = 5;      // x 2 columns = the last 10 moves
 constexpr int16_t kMoveListColumn2X = 640;
-constexpr int16_t kMaterialBaseline = 296;
+constexpr int16_t kMaterialBaseline = 288;
 
-// Game buttons: a grid of 3 rows x 2 columns, slot = row * 2 + column.
+// Game buttons: a grid of 3 rows x 2 columns, slot = row * 2 + column. Every button is
+// kMinButtonH tall with kButtonGap between rows: a fingertip on glass, not a mouse.
+constexpr int16_t kMinButtonH = 48;
+constexpr int16_t kButtonGap = 8;
 constexpr int kSideButtonSlots = 6;
 constexpr int16_t kSideButtonW = 140;
-constexpr int16_t kSideButtonH = 40;
-constexpr int16_t kSideButtonY0 = 312;
-constexpr int16_t kSideButtonStep = 48;
+constexpr int16_t kSideButtonH = kMinButtonH;
+constexpr int16_t kSideButtonStep = kSideButtonH + kButtonGap;                       // 56
+constexpr int16_t kSideButtonY0 = arrocco::kScreenH - 16 - 3 * kSideButtonStep + kButtonGap;  // 304
 constexpr int16_t kSideButtonX0 = kSideInnerX;
 constexpr int16_t kSideButtonX1 = kSideInnerX + kSideInnerW - kSideButtonW;  // 644
 constexpr Rect sideButtonRect(int slot) {
@@ -75,9 +80,9 @@ constexpr int16_t kMenuTitleBaseline = 60;
 constexpr int16_t kMenuSubtitleBaseline = 80;
 constexpr int16_t kMenuButtonX = 200;
 constexpr int16_t kMenuButtonW = 400;
-constexpr int16_t kMenuButtonH = 48;
+constexpr int16_t kMenuButtonH = kMinButtonH;
 constexpr int16_t kMenuButtonY0 = 96;
-constexpr int16_t kMenuButtonStep = 56;
+constexpr int16_t kMenuButtonStep = kMenuButtonH + kButtonGap;  // 56
 constexpr int16_t kMenuFooterBaseline = 464;
 constexpr Rect menuButtonRect(int slot) {
   return Rect{kMenuButtonX, static_cast<int16_t>(kMenuButtonY0 + slot * kMenuButtonStep),
@@ -101,12 +106,18 @@ constexpr Rect promotionButtonRect(int choice) {
 }
 
 constexpr int kDialogMaxButtons = 3;
-constexpr Rect kConfirmBox{64, 144, 352, 208};
+// Confirm popup: title, then three stacked kMinButtonH buttons, kButtonGap apart.
+constexpr int16_t kConfirmButtonW = 320;
+constexpr int16_t kConfirmButtonY0 = 56;   // first button top, below the box top
+constexpr Rect kConfirmBox{64, 120, 352, kConfirmButtonY0 + 3 * (kMinButtonH + kButtonGap) + 8};  // 232 tall
 constexpr Rect kGameOverBox{40, 136, 400, 208};
 
 // ---- behaviour ---------------------------------------------------------------------------
 constexpr int16_t kTapSlop = 16;                  // Up this close to Down still counts as a tap
 constexpr uint32_t kPanelOffAfterMs = 3000;       // idle time before dropping the high voltage
+constexpr uint32_t kTouchHoldMaxMs = 2000;        // a finger "down" longer than this is a lost Up
+constexpr int kBatteryRepaintStep = 5;            // menu footer: repaint only for a change this big
+constexpr uint32_t kBatteryRepaintMinMs = 30000;  // ... and not more often than this (USB: at once)
 constexpr uint8_t kPartialsBeforeFull = 16;       // "normal" refresh policy
 constexpr uint8_t kPartialsBeforeFullFewer = 32;  // "fewer flashes"
 

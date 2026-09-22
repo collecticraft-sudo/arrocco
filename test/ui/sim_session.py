@@ -30,7 +30,9 @@ SQ, BX, BY = 56, 16, 16
 BOARD = (16, 16, 448, 448)
 SIDE_X = 496
 MENU_BTN = lambda slot: (200, 96 + slot * 56, 400, 48)
-SIDE_BTN = lambda slot: (496 if slot % 2 == 0 else 644, 312 + (slot // 2) * 48, 140, 40)
+SIDE_BTN = lambda slot: (496 if slot % 2 == 0 else 644, 304 + (slot // 2) * 56, 140, 48)
+CONFIRM_BOX = (64, 120, 352, 232)
+CONFIRM_BTN = lambda i: (80, 120 + 56 + i * 56, 320, 48)   # resign / draw / cancel
 PROMO_BTN = lambda i: (36 + i * 104, 200, 96, 96)
 PROMO_BOX = (24, 152, 432, 160)
 GAMEOVER_BOX = (40, 136, 400, 208)
@@ -404,10 +406,10 @@ def main():
     # ---- 10. resign via the confirm popup ---------------------------------------------------------------
     confirm = s.step("tap 'Resign / Draw'", *center(SIDE_BTN(BTN_RESIGN)), kind="partial")[0]
     sim.save(confirm, "13_confirm")
-    check(box_present(confirm, (64, 144, 352, 208)), "resign: confirm popup drawn")
-    s.step("resign: tap 'Cancel'", 240, 144 + 56 + 2 * 48 + 20, kind="partial")
+    check(box_present(confirm, CONFIRM_BOX), "resign: confirm popup drawn")
+    s.step("resign: tap 'Cancel'", *center(CONFIRM_BTN(2)), kind="partial")
     s.step("tap 'Resign / Draw' again", *center(SIDE_BTN(BTN_RESIGN)), kind="partial")
-    resigned = s.step("resign: tap 'Black resigns'", 240, 144 + 56 + 20, kind="deep")[0]
+    resigned = s.step("resign: tap 'Black resigns'", *center(CONFIRM_BTN(0)), kind="deep")[0]
     sim.save(resigned, "14_resigned")
     check(box_present(resigned, GAMEOVER_BOX), "resign: game-over overlay")
     check(resigned.region((60, 190, 360, 26)) != checkmate_reason, "resign: reason line differs from 'Checkmate'")

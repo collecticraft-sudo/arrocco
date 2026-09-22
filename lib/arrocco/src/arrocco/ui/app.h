@@ -55,6 +55,7 @@ class ChessApp final : public arrocco::App {
   bool touchDown_ = false;
   int16_t downX_ = 0;
   int16_t downY_ = 0;
+  uint32_t downMs_ = 0;
   uint32_t lastActivityMs_ = 0;   // last touch or present()
   bool panelOffSent_ = true;
   uint8_t partialsSinceFull_ = 0;

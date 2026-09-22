@@ -60,7 +60,8 @@ struct Context {
   Settings settings;
   GameClock clock;
   bool flipped = false;        // orientation of the game being played
-  bool gameInProgress() const { return game.plyCount() > 0 && !game.isOver(); }
+  bool started = false;        // a game was set up on this power cycle
+  bool gameInProgress() const { return started && !game.isOver(); }
   void startNewGame(uint32_t now);
   void play(Sound s);          // honours settings.sound
 };
