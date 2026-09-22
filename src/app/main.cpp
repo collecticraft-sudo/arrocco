@@ -15,6 +15,9 @@
 #include "gt911.h"
 #include "i2cbus.h"
 #include "log.h"
+#include "net_console.h"
+#include "net_http.h"
+#include "net_wifi.h"
 #include "panel.h"
 
 namespace {
@@ -194,6 +197,7 @@ void statusReport() {
           gauge::text(), static_cast<unsigned long>(s_events),
           static_cast<unsigned long>(s_platform.presents()),
           static_cast<unsigned long>(arrocco_app::engineStackFreeBytes()));
+  logLine("STAT  %s", net::netStatusLine());
 }
 
 } // namespace
@@ -208,6 +212,11 @@ void setup() {
           ESP.getChipModel(), static_cast<unsigned long>(ESP.getFlashChipSize() / (1024UL * 1024UL)),
           static_cast<unsigned long>(ESP.getPsramSize() / 1024UL),
           static_cast<unsigned long>(ESP.getFreeHeap() / 1024UL), TOUCH_SWAP_XY, TOUCH_MIRROR_X, TOUCH_MIRROR_Y);
+
+  // Before anything can open a TLS session: mbedTLS keeps a fixed 16 KB input and 16 KB
+  // output record buffer per session and this moves the lot to PSRAM. Once a session
+  // exists the buffers are already placed and the call comes too late.
+  net::mbedtlsUsePsram();
 
   s_platform.begin();
   SPI.begin(cfg::kEpdSck, -1, cfg::kEpdMosi, -1); // panel::begin() repeats it; the second call is a no-op
@@ -228,6 +237,13 @@ void setup() {
   } else {
     logLine("ENGI  no engine: %s ('Play vs engine' stays greyed)", arrocco_app::engineHashInfo());
   }
+
+  // Network last: everything here returns at once and the work happens in the loop
+  // (WiFi) or on the worker task (HTTPS). A board with no stored network opens its
+  // setup portal; one with a network is online a few seconds after the first screen.
+  net::httpBegin();
+  net::wifiBegin();
+  net::consoleBegin();
 
   const uint32_t now = millis();
   s_lastRetryMs = now;
@@ -257,6 +273,14 @@ void loop() {
   }
 
   s_platform.service(); // beeps and gauge, on its own fresh clock
+
+  // WiFi state machine, captive portal and the serial commands. Microseconds while the
+  // board is simply online. The one exception is WebServer::handleClient(), which the
+  // Arduino core writes with blocking reads and a 5 s client timeout: wifiService() only
+  // calls it while the setup portal is open or while an OAuth login is coming back, and
+  // says so on its declaration. Everything to do with Lichess runs on its own tasks.
+  net::wifiService();
+  net::consoleService();
 
   now = millis();
   if (now - s_lastHostCheckMs >= 1000) { // never block on a serial port nobody reads (as hwtest)
