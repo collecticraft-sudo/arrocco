@@ -119,24 +119,34 @@ def rook():
 
 
 def knight():
-    """A horse's head facing left. The one piece that is not symmetric."""
-    sil = foot(14.0, 10.0)
+    """A horse's head facing left: the one piece that is not symmetric, and the one that
+    has to be drawn rather than assembled. What makes it read as a horse at 56 px is the
+    long muzzle jutting out to the left, the notch between the two ears and the stepped
+    mane down the back - so those three get the pixels, and the neck stays plain."""
+    sil = foot(15.0, 11.0)
     sil += [
-        poly((21.0, 45.8), (35.0, 45.8), (34.0, 41.0), (22.0, 41.0)),   # collar
+        poly((19.4, 45.8), (36.0, 45.8), (35.2, 41.5), (19.8, 41.5)),   # collar
         poly(
-            (22.5, 41.5), (34.5, 41.5),                                 # neck, bottom edge
-            (35.0, 34.0), (33.5, 26.0), (31.0, 20.5),                   # back of the neck
-            (29.2, 15.5), (27.0, 10.2), (23.0, 15.0),                   # right ear
-            (20.4, 9.8), (17.8, 16.6),                                  # left ear
-            (15.2, 18.8), (12.8, 23.0), (12.2, 27.5),                   # forehead down to the muzzle
-            (14.5, 29.5), (18.0, 29.0),                                 # nose and mouth
-            (19.5, 33.0), (20.5, 37.0),                                 # jaw into the chest
+            (19.4, 45.6), (19.8, 40.0), (20.4, 35.6),                   # chest, leaning forward: the
+            (21.0, 32.0),                                               # neck arches. Throat latch here.
+            (18.2, 34.0), (14.6, 35.2),                                 # jowl: the cheek swings down
+            (10.6, 34.6), (7.8, 33.2),                                  # jaw, then the chin
+            (6.6, 30.0), (6.8, 26.6),                                   # blunt nose, carried LOW: the
+            (9.8, 23.4), (13.4, 20.2), (16.4, 17.4),                    # head tilts down about 40 deg
+            (17.6, 14.6),                                               # forehead
+            (19.8, 8.2), (21.0, 13.0),                                  # front ear, small and laid back
+            (23.4, 13.0),                                               # notch: flat-bottomed, 2.4 px,
+            (24.6, 8.0), (26.2, 13.2), (27.6, 16.4),                    # ... or it closes at threshold
+            (30.0, 18.6), (28.6, 21.0),                                 # mane: five steps down the arch
+            (31.8, 23.2), (30.4, 25.8),
+            (33.4, 28.0), (32.0, 30.8),
+            (34.4, 33.2), (33.2, 35.8),
+            (35.0, 38.4), (36.0, 45.6),                                 # back of the neck to the collar
         ),
     ]
     details = [
-        disc(20.6, 20.4, 1.9),                                          # eye
-        poly((21.6, 26.4), (15.2, 27.2), (15.0, 25.6), (21.6, 24.8)),   # nostril line
-        poly((25.4, 19.2), (29.4, 24.2), (27.7, 25.6), (23.7, 20.6)),   # mane crease
+        disc(17.4, 21.2, 2.0),                                          # eye, high and well back
+        poly((12.0, 32.2), (7.8, 30.4), (8.5, 29.0), (12.7, 30.8)),     # mouth line along the muzzle
     ]
     return sil, details
 
