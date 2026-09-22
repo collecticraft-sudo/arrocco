@@ -33,6 +33,28 @@ void Context::startNewGame(uint32_t now) {
   clock.reset(settings.clockPreset);
   clock.start(chess::Color::White, now);
   flipped = settings.flipByDefault;
+  if (engine != nullptr) engine->abort();     // a search left over from the game before
+  if (!vsEngine) return;
+
+  // The draw has to be a draw, and the only entropy a board with no radio has is the
+  // millisecond its owner touched the glass. xorshift32 on that, carried over between
+  // games so that two quick starts in a row do not give the same colour twice.
+  switch (humanSide) {
+    case HumanSide::White: engineColor = chess::Color::Black; break;
+    case HumanSide::Black: engineColor = chess::Color::White; break;
+    case HumanSide::Random: {
+      uint32_t x = rand_ ^ now ^ 0x9E3779B9u;
+      x ^= x << 13;
+      x ^= x >> 17;
+      x ^= x << 5;
+      rand_ = x;
+      engineColor = (x & 1u) ? chess::Color::Black : chess::Color::White;
+      break;
+    }
+  }
+  // Playing Black means looking at the board from Black's side, unless the owner
+  // asked for the opposite in the settings.
+  flipped = (engineColor == chess::Color::White) != settings.flipByDefault;
 }
 
 void Context::play(Sound s) {
@@ -49,12 +71,13 @@ void Context::play(Sound s) {
 
 // ---- ChessApp -----------------------------------------------------------------------------
 
-ChessApp::ChessApp(Platform& platform)
+ChessApp::ChessApp(Platform& platform, Engine* engine)
     : platform_(platform),
-      ctx_(platform, game_),
+      ctx_(platform, game_, engine),
       menu_(ctx_),
       clockPicker_(ctx_),
       settings_(ctx_),
+      engineSetup_(ctx_),
       game_screen_(ctx_),
       gameOver_(ctx_) {}
 
@@ -62,6 +85,7 @@ Screen& ChessApp::current() {
   switch (screenId_) {
     case ScreenId::ClockPicker: return clockPicker_;
     case ScreenId::Settings:    return settings_;
+    case ScreenId::EngineSetup: return engineSetup_;
     case ScreenId::Game:        return game_screen_;
     case ScreenId::GameOver:    return gameOver_;
     default:                    return menu_;

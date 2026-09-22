@@ -23,6 +23,56 @@ void GameScreen::enter() {
   mode_ = Mode::Play;
   deselect();
   ctx_.game.goToLatest();
+  // Coming back from the menu (or straight from the clock picker with the engine on
+  // White): whoever is to move has to be asked again, because Menu aborted the search.
+  startEngine();
+}
+
+// ---- the engine ---------------------------------------------------------------------------
+
+void GameScreen::startEngine() {
+  engineWaiting_ = false;
+  if (mode_ != Mode::Play || !ctx_.engineToMove()) return;
+  const chess::Game& game = ctx_.game;
+
+  // The engine wants the whole line, for the repetition rule. A game too long for the
+  // buffer gets the current position on its own instead: it loses the history, not the
+  // move. Both buffers are members, never locals: the loop task has 8 KB of stack.
+  bool wholeLine = true;
+  engineFen_[0] = '\0';
+  engineMoves_[0] = '\0';
+  if (game.uciMoveList(engineMoves_, sizeof engineMoves_) < 0) {
+    engineMoves_[0] = '\0';
+    wholeLine = false;
+  }
+  const chess::Position& from = wholeLine ? game.startPosition() : game.position();
+  // "" means the standard starting position to every implementation of the seam.
+  if (!(wholeLine && game.startedFromStartpos()) &&
+      from.toFen(engineFen_, sizeof engineFen_) <= 0)
+    return;
+
+  ctx_.engine->start(engineFen_, engineMoves_, ctx_.engineLevel, 0);
+  engineWaiting_ = true;
+}
+
+void GameScreen::stopEngine() {
+  if (!engineWaiting_) return;
+  engineWaiting_ = false;
+  ctx_.engine->abort();
+}
+
+// The answer arrived. An engine that hands over something the rules refuse must not be
+// able to stall the board, so the first legal move is played instead and the game goes
+// on; test/engine checks that this never has to happen.
+Action GameScreen::playEngineMove(const char* uci) {
+  chess::Move m = ctx_.game.position().parseUci(uci);
+  if (m.isNone()) {
+    chess::MoveList legal;
+    ctx_.game.position().generateLegalMoves(legal);
+    if (legal.empty()) return Action::pauseRepaint();   // the rules already ended the game
+    m = legal[0];
+  }
+  return playMove(m);
 }
 
 void GameScreen::select(Square s) {
@@ -59,7 +109,14 @@ void GameScreen::draw(Adafruit_GFX& gfx) {
   SidePanelView view;
   view.headline = pos.sideToMove() == Color::White ? str::kWhiteToMove : str::kBlackToMove;
   char lastText[32];
-  if (game.currentPly() == 0) {
+  char thinkingText[40];
+  if (engineWaiting_) {
+    const int level = clampEngineLevel(ctx_.engineLevel);
+    view.headline = str::kEngineThinking;
+    snprintf(thinkingText, sizeof thinkingText, str::kEngineLevelLineFmt, level + 1,
+             kEngineLevels[level].name);
+    view.subline = thinkingText;
+  } else if (game.currentPly() == 0) {
     view.subline = str::kNoMovesYet;
   } else {
     formatMove(game, game.currentPly() - 1, lastText, 20);
@@ -107,6 +164,8 @@ Action GameScreen::onTap(int16_t x, int16_t y) {
 }
 
 Action GameScreen::onSquare(Square s) {
+  // While the engine has the move, its pieces are not the player's to push around.
+  if (ctx_.engineToMove()) return Action::none();
   const chess::Position& pos = ctx_.game.position();
   const chess::Piece piece = pos.pieceAt(s);
   const bool own = !piece.isNone() && piece.color() == pos.sideToMove();
@@ -151,11 +210,15 @@ Action GameScreen::playMove(Move m) {
   ctx_.clock.moveMade(now);
   ctx_.play(Sound::Move);
   if (ctx_.game.isOver()) return endGame();
+  // Ask the engine BEFORE the repaint: one present() then shows the move just played
+  // and "Thinking..." together, instead of flashing the panel twice for one tap.
+  startEngine();
   // A finished move is the natural pause where a Full refresh is allowed.
   return Action::pauseRepaint();
 }
 
 Action GameScreen::endGame() {
+  stopEngine();
   ctx_.clock.stop(ctx_.platform.millis());
   ctx_.play(Sound::GameOver);
   return Action::go(ScreenId::GameOver, Refresh::Deep);
@@ -193,21 +256,34 @@ Action GameScreen::onConfirmTap(int16_t x, int16_t y) {
     game.declareResult(chess::GameResult::Draw, chess::GameEndReason::Agreement);
     return endGame();
   }
-  return Action::repaint();                    // Cancel, or a tap outside the dialog
+  // Cancel, or a tap outside the dialog. The engine was never stopped: if its answer
+  // is already in, the next tick plays it.
+  return Action::repaint();
 }
 
 Action GameScreen::onButton(int slot) {
   const uint32_t now = ctx_.platform.millis();
   switch (slot) {
     case kNewGame:
+      stopEngine();
       ctx_.startNewGame(now);
       mode_ = Mode::Play;
       deselect();
+      startEngine();                 // the engine may have White
       return Action::repaint(Refresh::Deep);
     case kUndo: {
+      stopEngine();
       if (!ctx_.game.takeBack()) return Action::none();
+      // Against the engine, one Undo undoes one MOVE of the player's: keep going back
+      // until it is the player's turn again (or the line runs out).
+      if (ctx_.vsEngine) {
+        while (ctx_.game.position().sideToMove() == ctx_.engineColor && ctx_.game.plyCount() > 0) {
+          if (!ctx_.game.takeBack()) break;
+        }
+      }
       deselect();
       ctx_.clock.switchTo(ctx_.game.position().sideToMove(), now);
+      startEngine();                 // only fires if the undo landed on the engine's turn
       return Action::repaint();
     }
     case kFlip:
@@ -219,6 +295,7 @@ Action GameScreen::onButton(int slot) {
       mode_ = Mode::Confirm;
       return Action::repaint();
     case kMenu:
+      stopEngine();                  // nothing may repaint over the menu
       deselect();
       return Action::go(ScreenId::Menu);
     default:
@@ -227,6 +304,17 @@ Action GameScreen::onButton(int slot) {
 }
 
 Action GameScreen::onTick(uint32_t now) {
+  // The engine first: its move is the only thing here that changes the position.
+  // While a popup is open the answer stays in the engine until the popup closes.
+  if (engineWaiting_ && mode_ == Mode::Play && !ctx_.engine->thinking()) {
+    char uci[6];
+    if (ctx_.engine->take(uci)) {
+      engineWaiting_ = false;
+      return playEngineMove(uci);
+    }
+    engineWaiting_ = false;          // aborted, or nothing to give: do not poll for ever
+  }
+
   const GameClock& clock = ctx_.clock;
   if (!clock.enabled() || !clock.running()) return Action::none();
   const Color side = clock.runningSide();
