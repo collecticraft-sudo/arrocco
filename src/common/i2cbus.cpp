@@ -103,6 +103,19 @@ bool write16(uint8_t addr, uint16_t reg, uint8_t value) {
   return true;
 }
 
+bool write16(uint8_t addr, uint16_t reg, const uint8_t* buf, size_t len) {
+  if (!s_started || len == 0 || len > kMaxWrite) return fail();
+  Wire.beginTransmission(addr);
+  Wire.write(static_cast<uint8_t>(reg >> 8));
+  Wire.write(static_cast<uint8_t>(reg & 0xFF));
+  if (Wire.write(buf, len) != len) {
+    Wire.endTransmission(true);
+    return fail();
+  }
+  if (Wire.endTransmission(true) != 0) return fail();
+  return true;
+}
+
 uint32_t errors() { return s_errors; }
 
 const Scan& scan() {

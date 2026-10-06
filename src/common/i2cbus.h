@@ -33,8 +33,13 @@ bool linesIdle();
 bool probe(uint8_t addr);
 
 // Register access. On failure the buffer is left zeroed and the error counter goes up.
+// Reads longer than Wire's 128-byte buffer fail: split them.
 bool read16(uint8_t addr, uint16_t reg, uint8_t* buf, size_t len); // 16-bit register, high byte first
 bool write16(uint8_t addr, uint16_t reg, uint8_t value);
+// Several bytes in one transaction, to reg, reg+1, ... (the chip increments the pointer).
+// At most kMaxWrite bytes: Wire's buffer also holds the two register bytes.
+constexpr size_t kMaxWrite = 64;
+bool write16(uint8_t addr, uint16_t reg, const uint8_t* buf, size_t len);
 bool read8(uint8_t addr, uint8_t reg, uint8_t* buf, size_t len);   // 8-bit register
 
 uint32_t errors();

@@ -24,6 +24,7 @@ uint32_t s_busyUs = 0;
 uint32_t s_busyLastUs = 0;
 uint32_t s_waitUs = 0;    // the wait in progress
 uint32_t s_maxWaitUs = 0; // the longest wait of this refresh
+BusyHook s_busyHook = nullptr;
 
 void onBusy(const void*) { // no SPI, no drawing, no logging in here
   const uint32_t now = micros();
@@ -36,6 +37,8 @@ void onBusy(const void*) { // no SPI, no drawing, no logging in here
     s_waitUs = 0; // a new wait: the gap before it was an SPI transfer
   }
   s_busyLastUs = now;
+  // An I2C poll costs ~1.5 ms; the gap stays under 5 ms, so it still counts as waiting.
+  if (s_busyHook) s_busyHook();
   delay(1);
 }
 
@@ -142,6 +145,16 @@ void powerOff() {
   s_stats.powered = false;
   logLine("PANEL power off after idle (%lu ms)", static_cast<unsigned long>(millis() - t0));
 }
+
+void hibernate() {
+  const uint32_t t0 = millis();
+  display.hibernate(); // power off, then the UC8179 deep-sleep command (0x07, check code 0xA5)
+  s_stats.powered = false;
+  logLine("PANEL hibernating (%lu ms): the image stays, the controller sleeps until a reset",
+          static_cast<unsigned long>(millis() - t0));
+}
+
+void setBusyHook(BusyHook hook) { s_busyHook = hook; }
 
 void setBusyTimeoutMs(uint32_t ms) {
   const uint32_t us = ms * 1000u;

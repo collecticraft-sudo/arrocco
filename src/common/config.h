@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Arrocco hwtest - pins, screen geometry and tunables. Everything adjustable lives here.
+// Arrocco - pins, screen geometry and tunables, shared by hwtest and the game firmware.
+// Everything adjustable lives here.
 #pragma once
 #include <Arduino.h>
 
@@ -17,7 +18,7 @@
 
 namespace cfg {
 
-constexpr char kTitle[] = "Arrocco hwtest 0.5";
+constexpr char kTitle[] = "Arrocco hwtest 0.6";
 
 // --- pins: GPIO numbers, XIAO silk names in the comments ---
 constexpr uint8_t kEpdRst = 1;    // D0
@@ -27,10 +28,12 @@ constexpr uint8_t kEpdDc = 4;     // D3
 constexpr uint8_t kI2cSda = 5;    // D4  touch + MAX17048 (FTS02 header pin A4)
 constexpr uint8_t kI2cScl = 6;    // D5  (FTS02 header pin A5)
 constexpr uint8_t kTouchRst = 43; // D6  UART0 TX: the ROM boot banner wiggles it at reset.
-                                  //     Harmless: the GT911 reset sequence is run afterwards.
+                                  //     Harmless at power-on: the GT911 reset sequence runs
+                                  //     afterwards. Through a deep sleep it is held HIGH and
+                                  //     the ROM banner is switched off (power.cpp).
 constexpr uint8_t kBuzzer = 44;   // D7  KY-006 "S" pin
 constexpr uint8_t kEpdSck = 7;    // D8
-constexpr uint8_t kTouchInt = 8;  // D9  (later: deep-sleep wake pin)
+constexpr uint8_t kTouchInt = 8;  // D9  also the deep-sleep wake pin (ext0, LOW = a touch report)
 constexpr uint8_t kEpdMosi = 9;   // D10 (the panel has no MISO)
 constexpr uint32_t kI2cHz = 100000; // only 10k pull-ups on the bus: stay at 100 kHz
 
@@ -56,9 +59,15 @@ constexpr uint32_t kRefreshTooSlowMs = 8000; // whole refresh slower than this: 
 constexpr uint32_t kTouchPollMs = 8;
 constexpr uint32_t kTouchSilenceMs = 200;    // no frames for this long = finger lifted
 constexpr uint32_t kTouchRetryMs = 2000;     // begin() retry period while the chip is absent
-constexpr uint32_t kTouchFlushMs = 40;       // listening window after each refresh
+constexpr uint32_t kTouchFlushMs = 40;       // listening window after a refresh someone touched
 constexpr uint8_t kTouchLostAfter = 10;      // consecutive I2C failures before giving up polling
 
 constexpr uint32_t kGaugePollMs = 10000;
+
+// --- power (game firmware) ---
+// No touch, no serial command and nothing running (engine, game clock, network) for this
+// long: the board shows the sleep screen and goes into deep sleep; a touch wakes it.
+// 'sleep-after <s>' on the serial console changes it until the next power-on.
+constexpr uint32_t kSleepAfterIdleMs = 5UL * 60UL * 1000UL;
 
 } // namespace cfg

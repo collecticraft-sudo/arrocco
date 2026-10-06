@@ -6,7 +6,7 @@
 // and working. One screen refresh per user-visible event, every refresh timed.
 //
 // Serial keys (fallback when touch is dead): b t p s = screens, r = partial
-// refresh, f = full refresh, i = report, ? = help.
+// refresh, f = full refresh, i = report, g = the GT911 configuration (read only), ? = help.
 #include <Arduino.h>
 #include <esp_system.h>
 
@@ -246,6 +246,15 @@ void render() {
   s_lastActivityMs = millis();
 }
 
+// The GT911's configuration block, decoded: threshold, filters, report rate. Read only -
+// writing it is the game firmware's 'touch-level' command, never this.
+void dumpTouchConfig() {
+  gt911::Config cfgBlock;
+  if (!gt911::ready()) logLine("TOUCH not answering: no configuration to read");
+  else if (!gt911::readConfig(cfgBlock)) logLine("TOUCH configuration: two reads disagree or I2C failed, try again");
+  else gt911::logConfig(cfgBlock, "TOUCH cfg");
+}
+
 void pollSerialKeys() {
   while (Serial.available() > 0) {
     const int key = Serial.read();
@@ -259,8 +268,9 @@ void pollSerialKeys() {
       case 'r': s_dirty = true; break;
       case 'f': s_dirty = true; s_wantFull = true; break;
       case 'i': bootReport(); statusReport(); break;
+      case 'g': dumpTouchConfig(); break;
       case '?': logLine("KEYS  b/t/p/s = Board/Touch/Panel/Sound, k/w = all black/all white, r = partial refresh, "
-                         "f = full, i = report"); break;
+                         "f = full, i = report, g = touch configuration"); break;
       default: break; // CR, LF and anything else
     }
     s_lastActivityMs = millis();

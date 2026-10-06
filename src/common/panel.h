@@ -46,9 +46,18 @@ void begin();
 uint32_t refresh(Kind kind, uint32_t drawMs);
 bool fullDue();  // kFullEvery partial refreshes reached
 void powerOff(); // call after a few idle seconds; the next refresh pays ~140 ms power-on
+// Before a deep sleep: high voltage off and the controller into its own deep sleep, which
+// only a hardware reset ends (panel::begin() does one at the next boot).
+void hibernate();
 // How long one BUSY wait may last before the library gives up on it. A wait that runs
 // into it marks the refresh as not responding whatever the total time.
 void setBusyTimeoutMs(uint32_t ms);
 const Stats& stats();
+
+// Called about once a millisecond while a refresh waits on BUSY - the only time the CPU
+// has nothing else to do during one. The game firmware polls the touch controller from
+// it (gt911::refreshPoll). No SPI and no drawing in there. nullptr = none.
+using BusyHook = void (*)();
+void setBusyHook(BusyHook hook);
 
 } // namespace panel
