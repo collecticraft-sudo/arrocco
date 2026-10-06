@@ -4,6 +4,10 @@
 #include <driver/gpio.h>
 #include <driver/rtc_io.h>
 #include <esp_attr.h>
+#include <esp_intr_alloc.h>
+#include <hal/gpio_ll.h>
+#include <soc/gpio_struct.h>
+#include <soc/interrupts.h>
 #include <string.h>
 
 #include "config.h"
@@ -46,15 +50,34 @@ RefreshTouch s_last = {false, false, 0, 0, 0, 0, false}; // the last finished on
 bool s_recDown = false;            // the last report recorded in this refresh had a finger
 uint32_t s_lastRefreshPollMs = 0;
 
-void IRAM_ATTR onIntEdge() { s_intEdges = s_intEdges + 1; }
+// INT edges are counted by a GPIO interrupt of our own, allocated once from the calling
+// task. attachInterrupt() would go through gpio_install_isr_service(), which ESP-IDF always
+// runs on the IPC task of the interrupt's core: a 1 KB stack. On the first device an
+// interrupt arriving inside that esp_intr_alloc() overflowed it at one boot in two
+// ("Stack canary watchpoint triggered (ipc1)"). Nothing else in the firmware uses GPIO
+// interrupts, so a plain esp_intr_alloc() for the GPIO source does the job, on the stack
+// of whoever calls begin(). Never mix this with attachInterrupt() on any other pin.
+constexpr uint32_t kIntMask = 1u << cfg::kTouchInt; // GPIO8: the low status register
+intr_handle_t s_intHandle = nullptr;
+
+void IRAM_ATTR onGpioInterrupt(void*) {
+  uint32_t status = 0;
+  gpio_ll_get_intr_status(&GPIO, 0, &status); // on the S3 one register serves both cores
+  if (status & kIntMask) s_intEdges = s_intEdges + 1;
+  gpio_ll_clear_intr_status(&GPIO, status);
+}
+
+void detachIsr() {
+  const gpio_num_t pin = static_cast<gpio_num_t>(cfg::kTouchInt);
+  gpio_intr_disable(pin);
+  gpio_set_intr_type(pin, GPIO_INTR_DISABLE);
+  s_isrAttached = false;
+}
 
 // The chip latches its I2C address from INT while RST rises: LOW -> 0x5D, HIGH -> 0x14.
 // Leaves RST driven HIGH for good: neither RST nor INT has a pull-up on the board.
 void resetSequence(bool intHigh) {
-  if (s_isrAttached) {
-    detachInterrupt(digitalPinToInterrupt(cfg::kTouchInt));
-    s_isrAttached = false;
-  }
+  if (s_isrAttached) detachIsr();
   pinMode(cfg::kTouchInt, OUTPUT);
   pinMode(cfg::kTouchRst, OUTPUT);
   digitalWrite(cfg::kTouchInt, intHigh ? HIGH : LOW);
@@ -132,9 +155,20 @@ void settleStatus() {
 }
 
 void attachIsr() {
+  const gpio_num_t pin = static_cast<gpio_num_t>(cfg::kTouchInt);
+  if (s_intHandle == nullptr) {
+    const esp_err_t err = esp_intr_alloc(ETS_GPIO_INTR_SOURCE, ESP_INTR_FLAG_IRAM, onGpioInterrupt, nullptr,
+                                         &s_intHandle);
+    if (err != ESP_OK) {
+      logLine("TOUCH WARNING no GPIO interrupt for INT (%s): edges will not be counted", esp_err_to_name(err));
+      s_intHandle = nullptr;
+    }
+  }
+  gpio_ll_clear_intr_status(&GPIO, kIntMask);
   s_intEdges = 0;
   s_frames = 0;
-  attachInterrupt(digitalPinToInterrupt(cfg::kTouchInt), onIntEdge, CHANGE);
+  gpio_set_intr_type(pin, GPIO_INTR_ANYEDGE);
+  gpio_intr_enable(pin);
   s_isrAttached = true;
 }
 
@@ -376,10 +410,7 @@ void releaseSleepHold() {
 }
 
 void prepareForDeepSleep() {
-  if (s_isrAttached) {
-    detachInterrupt(digitalPinToInterrupt(cfg::kTouchInt));
-    s_isrAttached = false;
-  }
+  if (s_isrAttached) detachIsr();
   pinMode(cfg::kTouchRst, OUTPUT);
   digitalWrite(cfg::kTouchRst, HIGH);
   const esp_err_t hold = gpio_hold_en(static_cast<gpio_num_t>(cfg::kTouchRst));
