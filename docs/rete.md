@@ -9,9 +9,31 @@ Come la scacchiera si collega al WiFi e a Lichess. Il codice sta in `src/app/net
 > Per ora si guarda e si comanda tutto dal monitor seriale USB a 115200 baud. Il pezzo
 > che manca e' l'interfaccia, non il collegamento.
 
-## Primo avvio: il portale
+## La radio e' spenta finche' non serve
 
-Alla prima accensione la scacchiera non conosce nessuna rete, quindi ne apre una lei:
+Una scacchiera a batteria con la radio sempre accesa si scarica in pochi giorni. Quindi,
+dalla versione 0.2 del firmware:
+
+- **all'accensione la radio e' spenta**, che una rete sia salvata o no;
+- si accende da sola quando **un lavoro di rete** la chiede: una richiesta a Lichess, uno
+  stream, un login OAuth, il comando `wifi-on`. La scacchiera si aggancia alla rete
+  salvata, fa il lavoro e **spegne la radio 2 minuti dopo l'ultimo** (il margine serve a
+  non riagganciarsi per ogni comando quando se ne mandano diversi di fila). Uno stream
+  aperto tiene la radio accesa finche' resta aperto;
+- il **portale** di configurazione si apre **solo quando lo si chiede** (`wifi-portal`,
+  `wifi-forget`; in futuro una voce di menu) e si chiude da solo dopo **5 minuti senza
+  che il telefono chieda una pagina**;
+- con la radio accesa la scacchiera non va in deep sleep: aspetta che si spenga.
+
+Per i lavori fatti dal monitor seriale non cambia niente nell'uso: `li-whoami` scrive
+`NET   queued; the radio comes up first` e la risposta arriva dopo l'aggancio (fino a una
+ventina di secondi). `oauth-start` a radio spenta aggancia prima la rete e poi stampa
+l'indirizzo.
+
+## Il portale
+
+Quando la scacchiera non conosce ancora nessuna rete, la prima volta si apre il portale
+con `wifi-portal` (o, quando ci sara', dalla voce di menu):
 
 1. compare una rete WiFi aperta che si chiama **Arrocco-XXXX** (le ultime due cifre sono
    quelle del MAC della scheda, cosi due scacchiere vicine non si confondono);
@@ -20,26 +42,22 @@ Alla prima accensione la scacchiera non conosce nessuna rete, quindi ne apre una
 3. la pagina mostra le reti trovate: si sceglie la propria, si scrive la password e si
    preme **Save and connect**. C'e' anche un campo per scrivere a mano il nome di una
    rete nascosta;
-4. la rete Arrocco-XXXX si chiude e la scacchiera si collega alla rete di casa. Quello che
-   sta succedendo (*Scanning*, *Portal open*, *Connecting*, *Online*, *Failed*) si legge
-   sul monitor seriale, o col comando `wifi-status`.
+4. la rete Arrocco-XXXX si chiude e la scacchiera si collega alla rete di casa, per
+   provarla; due minuti dopo spegne la radio. Quello che sta succedendo (*WiFi off*,
+   *Scanning*, *Portal open*, *Connecting*, *Online*, *Failed*) si legge sul monitor
+   seriale, o col comando `wifi-status`.
 
 La pagina del portale e' fatta tutta di testo scritto dentro il firmware: nessuna
 immagine, nessun carattere scaricato, nessun indirizzo esterno. Deve funzionare su un
 telefono che in quel momento **non ha internet**, quindi qualunque cosa da scaricare non
 arriverebbe mai.
 
-Quanto resta aperto il portale:
-
-- se la scacchiera **non conosce nessuna rete**, resta aperto finche' non si salva
-  qualcosa: non c'e' fretta;
-- se invece una rete la conosce gia' e il portale si e' aperto **da solo** perche' quella
-  rete non rispondeva, dopo **cinque minuti senza che nessuno si colleghi** lo richiude e
-  torna a provare la rete di casa. Serve per il caso piu' comune di tutti: il router che
-  si stava solo riavviando. Cosi la scacchiera si ricollega da sola, senza che nessuno
-  debba toccarla;
-- il portale aperto a mano con `wifi-portal` invece non scade: se lo si e' chiesto e' per
-  cambiare rete, e sarebbe sciocco tornare da soli su quella vecchia.
+Quanto resta aperto il portale: **5 minuti dall'apertura o dall'ultima pagina chiesta dal
+telefono**, poi si chiude e la radio si spegne (oppure, se nel frattempo un lavoro di rete
+aspetta, la scacchiera prova la rete salvata). Compilare il modulo prende un minuto; un
+portale aperto che nessuno usa e' solo un access point aperto in piu' e una batteria che
+cala. Il portale non si apre piu' da solo quando la rete di casa non risponde: chi aspetta
+la rete riprova, con pause sempre piu' lunghe (3, 6, 12, 24, 30 s), finche' gli serve.
 
 Mentre il portale e' aperto la scacchiera rifa' la scansione delle reti ogni mezzo minuto,
 ma **solo se al portale non e' collegato nessuno**: una scansione fa saltare via per un
@@ -55,10 +73,13 @@ si zittisce a meta' richiesta, il programma principale — partita, orologio e t
 compresi — resta fermo fino a cinque secondi. Non e' un guasto e non fa ripartire la
 scheda, ma si vede.
 
-Per questo la porta 80 viene **servita solo in quelle due finestre**. Quando la scacchiera
-e' semplicemente online e si sta giocando, nessuno legge da quella porta e il problema non
-esiste. Il resto del lavoro di rete (Lichess, TLS, gli stream) sta su task suoi e non
-ferma mai la partita, nemmeno per un millisecondo.
+Per questo la porta 80 **esiste solo in quelle due finestre**: il server apre il suo
+socket quando si apre il portale o parte un login, e lo chiude quando finiscono. Il login
+che aspetta il telefono si abbandona da solo dopo **10 minuti** (`OAUTH failed: the phone
+did not come back in time`). Quando la scacchiera e' semplicemente online e si sta
+giocando, su quella porta non ascolta nessuno e il problema non esiste. Il resto del lavoro
+di rete (Lichess, TLS, gli stream) sta su task suoi e non ferma mai la partita, nemmeno per
+un millisecondo.
 
 ## Dove finiscono le cose
 
@@ -123,9 +144,13 @@ Dal monitor seriale (115200 baud), un comando per riga:
 
 - `wifi-forget` - dimentica la rete e riapre il portale Arrocco-XXXX;
 - `wifi-portal` - riapre il portale **senza** dimenticare la rete (utile per spostare la
-  scacchiera su un'altra rete);
+  scacchiera su un'altra rete). Si chiude da solo dopo 5 minuti senza pagine chieste;
+- `wifi-on` - aggancia la rete salvata adesso (resta su 2 minuti dopo l'ultimo lavoro);
+- `wifi-off` - spegne la radio subito, portale compreso;
 - `token-clear` - cancella il token Lichess;
-- `net` - stato di tutto: rete, TLS, token, stream aperti;
+- `net` - stato di tutto: rete, TLS, token, stream aperti, e quanta pila non hanno mai
+  usato i task di rete (serve a dimensionarle: oggi 10 KB il worker dei comandi, 8 KB
+  quello delle richieste e quelli degli stream);
 - `heap` - quanta memoria e' libera, e quanto poca ce n'e' stata al minimo;
 - `help` - la lista completa.
 
@@ -134,10 +159,12 @@ token.
 
 ## Se non si collega
 
-La scacchiera riprova da sola, aspettando ogni volta il doppio: 3 secondi, poi 6, poi 12.
-**Al quarto tentativo fallito riapre il portale** e chiede di nuovo la rete (e se nessuno
-si presenta, dopo cinque minuti ricomincia il giro da capo). Il motivo del fallimento per
-ora si legge solo sul seriale, con `wifi-status`:
+Finche' un lavoro di rete aspetta, la scacchiera riprova da sola, aspettando ogni volta il
+doppio: 3 secondi, poi 6, poi 12, fino a 30. Quando nessuno aspetta piu' (una richiesta
+rinuncia dopo 25 s), dopo 2 minuti spegne la radio. **Il portale non si riapre da solo**:
+la versione precedente lo faceva al quarto tentativo fallito e, con la rete di casa fuori
+portata, teneva un access point aperto per sempre. Il motivo del fallimento per ora si
+legge solo sul seriale, con `wifi-status`:
 
 - **wrong password** - la password e' sbagliata. `wifi-forget` e si ricomincia.
 - **network not found** - la rete non si vede. Attenzione: la scheda parla solo
@@ -154,7 +181,9 @@ la rete come "senza internet": basta aprire a mano **http://4.3.2.1**.
 
 ## Cosa non e' ancora stato provato
 
-Niente di tutto questo e' mai girato su una scheda vera: non esiste ancora. Il portale, il
-captive portal sul telefono, la macchina a stati del WiFi, TLS, lo spostamento di mbedTLS
-in PSRAM e il giro OAuth sono verificati **solo leggendoli e compilandoli**. Di Lichess
-sono verificati dal vivo, da Mac, i formati delle risposte e il ritmo dei keep-alive.
+Niente di tutto questo e' ancora girato sulla scheda: il primo esemplare (06/10/2026) ha
+fatto solo il collaudo dell'hardware. Il portale, il captive portal sul telefono, la
+macchina a stati del WiFi (con la radio accesa e spenta a richiesta), TLS, lo spostamento
+di mbedTLS in PSRAM e il giro OAuth sono verificati **solo leggendoli e compilandoli**. Di
+Lichess sono verificati dal vivo, da Mac, i formati delle risposte e il ritmo dei
+keep-alive. Le prove da fare sulla scheda sono in `collaudo.md` §G3.

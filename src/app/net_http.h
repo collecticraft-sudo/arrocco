@@ -24,6 +24,12 @@
 // with no way for the caller to know. Reopening is the client's decision, above the seam.
 // Backoff does live here, but only for the connect that openStream() starts.
 //
+// THE RADIO
+// It is off until something needs it (net_wifi.h). A request or a stream connect first
+// calls wifiWaitOnline() on its own task - up to 25 s while the station associates - and
+// an open stream keeps calling wifiNeed(), so the radio stays up exactly as long as the
+// network is in use, plus net_wifi's idle margin.
+//
 // BUDGET
 // Two concurrent TLS sessions are planned for (one long-lived stream plus one request),
 // a third only in passing - which is exactly the Lichess flow: /api/stream/event plus one
@@ -44,6 +50,11 @@ bool mbedtlsOnPsram();
 // Creates the mutex and the buffers and starts the request task. Call once from setup(),
 // after mbedtlsUsePsram().
 void httpBegin();
+
+// Stack never used so far, in bytes, for the STAT line: the request task, and the least
+// any finished stream task had left (0 = none has finished yet).
+uint32_t requestStackFree();
+uint32_t streamStackFreeMin();
 
 constexpr int kMaxStreams = 2;
 

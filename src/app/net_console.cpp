@@ -16,7 +16,11 @@
 namespace net {
 namespace {
 
-constexpr uint32_t kWorkerStack = 6144; // esp-tls handshake wants ~3.5 KB of it
+// The worker runs the TLS handshake of every serial request and of the OAuth exchange
+// (esp-tls + mbedTLS: ~3.5-4.5 KB with the certificate bundle), under its own frame and
+// makeClient()'s URL and header buffers. 6 KB left almost nothing; the STAT line reports
+// what is never used. Internal RAM, never PSRAM: tokenSave() writes NVS from this stack.
+constexpr uint32_t kWorkerStack = 10240;
 constexpr UBaseType_t kWorkerPrio = 2;
 constexpr BaseType_t kWorkerCore = 0;
 constexpr size_t kReplyMax = 4096; // lives in PSRAM: far too big for the task stack
@@ -24,6 +28,11 @@ constexpr size_t kReplyMax = 4096; // lives in PSRAM: far too big for the task s
 // each are printed anyway. A longer line simply wraps onto a second log entry: this is a
 // debug path, and 2 x 2 KB of internal RAM for it would not be worth the tidier output.
 constexpr size_t kLineMax = 512;
+// oauth-start needs the station online on the loop (it registers the callback route and
+// puts the board's own IP in the URL). With the radio off, the command waits this long for
+// it to come up, then gives up.
+constexpr uint32_t kOauthOnlineWaitMs = 30000;
+constexpr int kMaxExtraCommands = 4;
 
 enum class Job : uint8_t { Request, Oauth };
 
@@ -43,12 +52,20 @@ struct Cmd {
 };
 
 QueueHandle_t s_queue = nullptr;
+TaskHandle_t s_worker = nullptr;
 char s_input[256] = {};
 size_t s_inputLen = 0;
+uint32_t s_lines = 0;
 int s_testStreams[kMaxStreams] = {-1, -1};
 char s_line[kMaxStreams][kLineMax] = {};
 size_t s_lineLen[kMaxStreams] = {};
 char s_status[192] = {};
+char s_stacks[128] = {};
+bool s_oauthPending = false; // oauth-start typed while the radio was off
+uint32_t s_oauthPendingMs = 0;
+CommandHandler s_extraHandlers[kMaxExtraCommands] = {};
+HelpPrinter s_extraHelp[kMaxExtraCommands] = {};
+int s_extraCount = 0;
 
 // --- the worker -------------------------------------------------------------------------
 
@@ -101,18 +118,24 @@ void queueRequest(const char* method, const char* path, const char* body) {
   snprintf(cmd.method, sizeof(cmd.method), "%s", method);
   snprintf(cmd.path, sizeof(cmd.path), "%s", path);
   if (body) snprintf(cmd.body, sizeof(cmd.body), "%s", body);
-  if (!enqueue(cmd)) logLine("NET   the worker queue is full, command dropped");
+  if (!enqueue(cmd)) {
+    logLine("NET   the worker queue is full, command dropped");
+    return;
+  }
+  if (!wifiOnline()) logLine("NET   queued; the radio comes up first (up to 25 s)");
 }
 
 // --- commands ----------------------------------------------------------------------------
 
 void printHelp() {
   logLine("CMD   help | net | heap");
-  logLine("CMD   wifi-status | wifi-portal | wifi-forget");
+  logLine("CMD   wifi-status | wifi-on | wifi-off | wifi-portal | wifi-forget");
   logLine("CMD   token-status | token-set <token> | token-clear");
   logLine("CMD   oauth-start | oauth-status | oauth-cancel");
   logLine("CMD   li-whoami | li-get <path> | li-post <path> [body]");
   logLine("CMD   stream-open <path> | stream-close <id>");
+  for (int i = 0; i < s_extraCount; ++i)
+    if (s_extraHelp[i]) s_extraHelp[i]();
 }
 
 void printNet() {
@@ -128,6 +151,7 @@ void printNet() {
             transport().streamOnline(id) ? "up" : (transport().streamEnded(id) ? "ended" : "down"));
   }
   if (transport().lastError()[0]) logLine("NET   last error: %s", transport().lastError());
+  logLine("NET   %s", netStackLine());
 }
 
 void cmdStreamOpen(const char* path) {
@@ -155,6 +179,47 @@ void cmdStreamClose(int id) {
   logLine("NET   no test stream with id %d", id);
 }
 
+void startOauth() {
+  char url[400];
+  if (oauthBegin(url, sizeof(url)))
+    logLine("OAUTH open this on a phone on the same network (this becomes the QR):\n%s", url);
+  else
+    logLine("OAUTH could not start: %s", oauthError());
+}
+
+void cmdOauthStart() {
+  if (wifiOnline()) {
+    s_oauthPending = false;
+    startOauth();
+    return;
+  }
+  if (!wifiHasCredentials()) {
+    logLine("OAUTH no network stored: 'wifi-portal' first");
+    return;
+  }
+  s_oauthPending = true;
+  s_oauthPendingMs = ::millis();
+  wifiNeed();
+  logLine("OAUTH the radio is off: joining the network first, the URL follows (up to %lu s)",
+          static_cast<unsigned long>(kOauthOnlineWaitMs / 1000UL));
+}
+
+// Runs a pending oauth-start once the station is online, or gives it up.
+void servicePendingOauth(uint32_t now) {
+  if (!s_oauthPending) return;
+  if (wifiOnline()) {
+    s_oauthPending = false;
+    startOauth();
+    return;
+  }
+  if (now - s_oauthPendingMs >= kOauthOnlineWaitMs) {
+    s_oauthPending = false;
+    logLine("OAUTH the network did not come up (%s): oauth-start again later", wifiDetail());
+    return;
+  }
+  wifiNeed();
+}
+
 // Splits "verb rest": returns the rest (possibly empty, never null) and NUL-terminates
 // the verb in place.
 char* splitVerb(char* line) {
@@ -167,6 +232,7 @@ char* splitVerb(char* line) {
 }
 
 void dispatch(char* line) {
+  const size_t length = strlen(line);
   char* rest = splitVerb(line);
   if (strcmp(line, "help") == 0) {
     printHelp();
@@ -179,6 +245,16 @@ void dispatch(char* line) {
             static_cast<unsigned long>(ESP.getFreePsram() / 1024UL));
   } else if (strcmp(line, "wifi-status") == 0) {
     logLine("WIFI  %s - %s (AP name %s)", wifiStateText(), wifiDetail(), wifiApSsid());
+  } else if (strcmp(line, "wifi-on") == 0) {
+    if (!wifiHasCredentials()) {
+      logLine("WIFI  no network stored: 'wifi-portal' first");
+    } else {
+      wifiNeed();
+      logLine("WIFI  station wanted: it stays up 2 min after the last network job");
+    }
+  } else if (strcmp(line, "wifi-off") == 0) {
+    s_oauthPending = false;
+    wifiRadioOff("asked on the serial console");
   } else if (strcmp(line, "wifi-portal") == 0) {
     wifiOpenPortal();
   } else if (strcmp(line, "wifi-forget") == 0) {
@@ -195,14 +271,11 @@ void dispatch(char* line) {
   } else if (strcmp(line, "token-clear") == 0) {
     tokenClear();
   } else if (strcmp(line, "oauth-start") == 0) {
-    char url[400];
-    if (oauthBegin(url, sizeof(url)))
-      logLine("OAUTH open this on a phone on the same network (this becomes the QR):\n%s", url);
-    else
-      logLine("OAUTH could not start: %s", oauthError());
+    cmdOauthStart();
   } else if (strcmp(line, "oauth-status") == 0) {
     logLine("OAUTH %s%s%s", oauthStateText(), oauthError()[0] ? " - " : "", oauthError());
   } else if (strcmp(line, "oauth-cancel") == 0) {
+    s_oauthPending = false;
     oauthCancel();
   } else if (strcmp(line, "li-whoami") == 0) {
     queueRequest("GET", "/api/account", nullptr);
@@ -219,7 +292,11 @@ void dispatch(char* line) {
   } else if (strcmp(line, "stream-close") == 0) {
     cmdStreamClose(atoi(rest));
   } else if (line[0]) {
-    logLine("CMD   unknown command '%s' - type help", line);
+    for (int i = 0; i < s_extraCount; ++i)
+      if (s_extraHandlers[i] && s_extraHandlers[i](line, rest)) return;
+    // Never echoed: a token pasted without 'token-set' in front of it would end up in
+    // the log (and in whatever the log is pasted into).
+    logLine("CMD   unknown command (%u characters, not shown) - type help", static_cast<unsigned>(length));
   }
 }
 
@@ -260,8 +337,11 @@ void drainStreams() {
 
 void consoleBegin() {
   if (!s_queue) s_queue = xQueueCreate(4, sizeof(Cmd));
-  xTaskCreatePinnedToCore(workerTask, "arrocco-net", kWorkerStack, nullptr, kWorkerPrio, nullptr,
-                          kWorkerCore);
+  if (xTaskCreatePinnedToCore(workerTask, "arrocco-net", kWorkerStack, nullptr, kWorkerPrio, &s_worker,
+                              kWorkerCore) != pdPASS) {
+    s_worker = nullptr;
+    logLine("NET   the console worker did not start: serial network commands will not run");
+  }
 }
 
 void consoleService() {
@@ -271,6 +351,7 @@ void consoleService() {
     if (c == '\n' || c == '\r') {
       if (s_inputLen > 0) {
         s_input[s_inputLen] = '\0';
+        ++s_lines;
         dispatch(s_input);
         memset(s_input, 0, sizeof(s_input)); // a pasted token does not linger in RAM
         s_inputLen = 0;
@@ -280,11 +361,13 @@ void consoleService() {
     if (s_inputLen + 1 < sizeof(s_input)) s_input[s_inputLen++] = static_cast<char>(c);
   }
   drainStreams();
+  const uint32_t now = ::millis();
+  servicePendingOauth(now);
+  oauthPoll(now);
   if (oauthState() == OauthState::Exchanging) {
     Cmd cmd = {};
     cmd.job = Job::Oauth;
     static uint32_t lastNudgeMs = 0;
-    const uint32_t now = ::millis();
     if (now - lastNudgeMs > 1000) { // the worker also polls, this only shortens the wait
       lastNudgeMs = now;
       enqueue(cmd);
@@ -292,10 +375,30 @@ void consoleService() {
   }
 }
 
+void consoleAddCommands(CommandHandler handler, HelpPrinter help) {
+  if (s_extraCount >= kMaxExtraCommands) return;
+  s_extraHandlers[s_extraCount] = handler;
+  s_extraHelp[s_extraCount] = help;
+  ++s_extraCount;
+}
+
+uint32_t consoleLines() { return s_lines; }
+
 const char* netStatusLine() {
   snprintf(s_status, sizeof(s_status), "net %s (%s), TLS %s, token %s", wifiStateText(),
            wifiDetail(), mbedtlsOnPsram() ? "PSRAM" : "int", tokenPresent() ? "yes" : "no");
   return s_status;
+}
+
+const char* netStackLine() {
+  const uint32_t worker = s_worker ? uxTaskGetStackHighWaterMark(s_worker) * sizeof(StackType_t) : 0;
+  const uint32_t stream = streamStackFreeMin();
+  char streamText[24];
+  if (stream) snprintf(streamText, sizeof(streamText), "%lu B", static_cast<unsigned long>(stream));
+  else snprintf(streamText, sizeof(streamText), "none closed yet");
+  snprintf(s_stacks, sizeof(s_stacks), "stack never used: arrocco-net %lu B, arrocco-req %lu B, arrocco-str* %s",
+           static_cast<unsigned long>(worker), static_cast<unsigned long>(requestStackFree()), streamText);
+  return s_stacks;
 }
 
 } // namespace net

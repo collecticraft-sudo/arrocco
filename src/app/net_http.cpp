@@ -33,12 +33,19 @@ constexpr uint32_t kLockWaitMs = 30000;
 constexpr uint32_t kBackoffFirstMs = 1000; // connect retries inside openStream's task
 constexpr uint32_t kBackoffMaxMs = 8000;
 constexpr uint8_t kConnectAttempts = 4;
+// The radio is off until a job needs it (net_wifi.h): a request or a stream first waits
+// for the station to come up. Association + DHCP take up to 20 s; a little more here.
+constexpr uint32_t kOnlineWaitMs = 25000;
 
 constexpr size_t kRingBytes = 8192; // per stream, in PSRAM
 constexpr size_t kReplyMax = 8192;  // the request task's own landing buffer, in PSRAM
 constexpr size_t kBodyMax = 512;
 
-constexpr uint32_t kTaskStack = 6144; // esp-tls handshake wants ~3.5 KB of it
+// esp-tls + mbedTLS want ~3.5-4.5 KB of stack in the handshake (bundle verification
+// included), and makeClient() puts the URL and the bearer header on top: 6 KB left too
+// little margin. Internal RAM, never PSRAM: NVS is written from these stacks. The STAT
+// line reports how much each one has never used (stackFree*()).
+constexpr uint32_t kTaskStack = 8192;
 constexpr UBaseType_t kTaskPrio = 2;
 constexpr BaseType_t kTaskCore = 0; // core 1 runs the loop, the panel and the touch
 
@@ -47,6 +54,9 @@ SemaphoreHandle_t s_slotLock = nullptr;
 SemaphoreHandle_t s_wake = nullptr;
 SemaphoreHandle_t s_errLock = nullptr; // setError() is called from four tasks
 bool s_psramTls = false;
+TaskHandle_t s_requestTask = nullptr;
+// The least free stack any finished stream task ever had, in bytes (0 = none finished).
+volatile uint32_t s_streamStackFreeMin = 0;
 // Written by the request task and by the stream tasks, read by the loop through
 // rateLimitWaitS(): volatile so the read is never hoisted out of a poll.
 volatile uint32_t s_gateUntilMs = 0;
@@ -179,8 +189,14 @@ int perform(const char* method, const char* path, const char* body, char* out, s
             bool auth, int* lengthOut) {
   if (lengthOut) *lengthOut = 0;
   if (out && outSize) out[0] = '\0';
-  if (!wifiOnline()) {
-    setError("offline");
+  if (!wifiHasCredentials()) {
+    setError("no network stored ('wifi-portal' to set one)");
+    return kErrOffline;
+  }
+  // The radio may be off: this brings the station up and waits for it (this is a task).
+  if (!wifiWaitOnline(kOnlineWaitMs)) {
+    setError("offline: the network did not come up in %lu s",
+             static_cast<unsigned long>(kOnlineWaitMs / 1000UL));
     return kErrOffline;
   }
   const uint32_t now = ::millis();
@@ -236,6 +252,7 @@ int perform(const char* method, const char* path, const char* body, char* out, s
   }
 
   giveLine();
+  wifiNeed(); // the radio stays up a while longer: the next request is often close behind
   return result;
 }
 
@@ -331,7 +348,11 @@ void releaseSlot(Stream& s) {
 // The wire lock is held only for the connect: a stream that is up must never keep it, or
 // no move could ever be posted.
 esp_http_client_handle_t streamConnect(Stream& s) {
-  if (gated(::millis()) || !wifiOnline()) return nullptr;
+  if (gated(::millis())) return nullptr;
+  if (!wifiWaitOnline(kOnlineWaitMs)) { // the radio may be off: bring the station up first
+    setError("stream %s: offline", s.path);
+    return nullptr;
+  }
   if (!takeLine(kLockWaitMs)) return nullptr;
 
   esp_http_client_handle_t c = makeClient("GET", s.path, true, true);
@@ -380,6 +401,7 @@ void streamTask(void* arg) {
     s.online = true;
     uint32_t lastByteMs = ::millis();
     while (!s.stop && !s.ended) {
+      wifiNeed(); // an open stream keeps the radio on (two plain words, once a byte or a second)
       char ch = 0;
       // One byte at a time: esp_http_client keeps the rest of each socket read in its own
       // buffer, so only the first byte of a burst touches the socket. Reading a bigger
@@ -426,6 +448,8 @@ void streamTask(void* arg) {
   // here (slotStorage() owns the ring and the mutex for good), so releaseSlot() cannot
   // pull anything out from under a readStream() that is running on the loop task.
   while (!s.stop) vTaskDelay(pdMS_TO_TICKS(100));
+  const uint32_t freeBytes = uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t);
+  if (s_streamStackFreeMin == 0 || freeBytes < s_streamStackFreeMin) s_streamStackFreeMin = freeBytes;
   releaseSlot(s);
   vTaskDelete(nullptr);
 }
@@ -470,10 +494,18 @@ void httpBegin() {
     // 2 x 8 KB of PSRAM plus two mutexes, taken once and held for good: see slotStorage().
     if (!slotStorage(s_streams[i])) logLine("NET   stream slot %d has no buffer", i);
   }
-  if (xTaskCreatePinnedToCore(requestTask, "arrocco-req", kTaskStack, nullptr, kTaskPrio, nullptr,
-                              kTaskCore) != pdPASS)
+  if (xTaskCreatePinnedToCore(requestTask, "arrocco-req", kTaskStack, nullptr, kTaskPrio, &s_requestTask,
+                              kTaskCore) != pdPASS) {
+    s_requestTask = nullptr;
     logLine("NET   the request task did not start: Lichess calls will all be refused");
+  }
 }
+
+uint32_t requestStackFree() {
+  return s_requestTask ? uxTaskGetStackHighWaterMark(s_requestTask) * sizeof(StackType_t) : 0;
+}
+
+uint32_t streamStackFreeMin() { return s_streamStackFreeMin; }
 
 uint32_t Esp32Transport::millis() const { return ::millis(); }
 
@@ -532,10 +564,11 @@ void Esp32Transport::endRequest() {
 
 int Esp32Transport::openStream(const char* path) {
   if (!path) return kNoStream;
-  if (!wifiOnline()) {
-    setError("offline");
+  if (!wifiHasCredentials()) {
+    setError("no network stored");
     return kNoStream;
   }
+  wifiNeed(); // the radio may be off: the stream task waits for the station to come up
   for (int i = 0; i < kMaxStreams; ++i) {
     Stream& s = s_streams[i];
     if (s.inUse) continue;

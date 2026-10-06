@@ -7,6 +7,8 @@
 #include <WiFi.h>
 #include <esp_mac.h>
 #include <esp_wifi_types.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "log.h"
 
@@ -23,15 +25,14 @@ constexpr size_t kPassMax = 65; // 64 + NUL
 constexpr uint32_t kConnectTimeoutMs = 20000; // association + DHCP
 constexpr uint32_t kRetryFirstMs = 3000;      // backoff between attempts: 3, 6, 12, 24, 30 s
 constexpr uint32_t kRetryMaxMs = 30000;
-constexpr uint8_t kPortalAfterFailures = 4;   // give up on the stored network, ask the user
 constexpr uint32_t kScanPeriodMs = 30000;     // refresh the portal's list in the background
 constexpr uint32_t kPortalCloseDelayMs = 1500; // let the "saved" page reach the browser
-// A portal opened because the stored network kept failing is not allowed to stay open for
-// ever: a router that was simply rebooting would otherwise need a human. After this long
-// with nobody joining the AP, the board closes it and goes back to trying the network it
-// knows. A portal opened because there is no stored network at all has nothing to go back
-// to, so it stays up.
-constexpr uint32_t kPortalIdleGiveUpMs = 300000; // 5 minutes
+// The radio goes off this long after the last network job asked for it: long enough for
+// a few serial test commands in a row, short enough not to matter on battery.
+constexpr uint32_t kStationIdleOffMs = 120000;
+// The portal closes this long after it opened, or after the last page it served. Filling
+// in the form takes a minute; a portal nobody uses must not keep an open AP up for ever.
+constexpr uint32_t kPortalIdleMs = 300000;
 constexpr uint8_t kDnsPort = 53;
 
 // Portal address. 4.3.2.1 is the usual captive-portal pick: short to type and outside
@@ -40,7 +41,11 @@ const IPAddress kApIp(4, 3, 2, 1);
 const IPAddress kApMask(255, 255, 255, 0);
 
 WebServer* s_web = nullptr;
-DNSServer* s_dns = nullptr;
+// One instance for good, never deleted: AsyncUDP may still hand a queued packet to it
+// after stop(), and a deleted object there is a use-after-free. (The first version
+// deleted it 1.5 s after "Save and connect", while the phone was still asking.)
+DNSServer s_dns;
+bool s_dnsUp = false;
 
 WifiState s_state = WifiState::Off;
 char s_ssid[kSsidMax] = {};
@@ -58,12 +63,16 @@ bool s_scanRunning = false;
 int16_t s_scanCount = 0;
 uint32_t s_portalCloseAtMs = 0;
 bool s_portalCloseArmed = false;
-bool s_handlersUp = false;
-uint32_t s_portalOpenedMs = 0;
-bool s_portalByUser = false; // 'wifi-portal': the user asked, so it does not time out
+uint32_t s_portalActivityMs = 0;
+bool s_handlersUp = false; // routes registered on s_web
+bool s_serverUp = false;   // s_web listening on port 80
+bool s_noCredsLogged = false;
 // Raised and lowered by net_token.cpp, which does it from the console worker task as well
 // as from the loop; read by wifiService() on the loop.
 volatile bool s_webWindow = false;
+// Written by any task through wifiNeed(), read by the loop.
+volatile uint32_t s_needMs = 0;
+volatile bool s_needed = false;
 
 // Written by the WiFi event task, read by the loop: only ever a plain word.
 volatile uint8_t s_lastDisconnectReason = 0;
@@ -95,6 +104,7 @@ void storeCreds(const char* ssid, const char* pass) {
   snprintf(s_ssid, sizeof(s_ssid), "%s", ssid);
   snprintf(s_pass, sizeof(s_pass), "%s", pass ? pass : "");
   s_haveCreds = s_ssid[0] != '\0';
+  s_noCredsLogged = false;
   // The SSID is broadcast by the router anyway; the password never reaches the log.
   logLine("WIFI  network '%s' stored (password %u chars, not logged)", s_ssid,
           static_cast<unsigned>(strlen(s_pass)));
@@ -135,12 +145,22 @@ void setDetail(const char* fmt, ...) {
   va_end(ap);
 }
 
+void setOffDetail() {
+  if (s_haveCreds) setDetail("radio off, '%s' stored", s_ssid);
+  else setDetail("radio off, no network stored");
+}
+
 void onWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
-  // Runs on the event task: no logLine() here (it owns a static buffer for the loop).
+  // Runs on the event task: only plain words written here.
   if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
     s_lastDisconnectReason = info.wifi_sta_disconnected.reason;
     s_disconnectPending = true;
   }
+}
+
+// Signed: a task may stamp its need a moment after the loop read the clock.
+bool stationWanted(uint32_t now) {
+  return s_webWindow || (s_needed && static_cast<int32_t>(now - s_needMs) < static_cast<int32_t>(kStationIdleOffMs));
 }
 
 // A scan in AP_STA mode makes the radio leave the AP's channel for a second or two, which
@@ -235,12 +255,13 @@ void handlePortalRoot() {
 }
 
 void handleRoot() {
-  if (s_state == WifiState::Portal || s_state == WifiState::Scanning) {
+  if (wifiPortalOpen()) {
+    s_portalActivityMs = ::millis();
     if (s_web->hasArg("scan")) startScan();
     handlePortalRoot();
     return;
   }
-  // Online: a one-line status page, handy on the LAN and harmless. No secrets on it.
+  // Online (inside a login window): a one-line status page. No secrets on it.
   String page = F("<!doctype html><html><head><meta charset=utf-8>"
                   "<meta name=viewport content='width=device-width,initial-scale=1'>"
                   "<title>Arrocco</title><style>body{font-family:system-ui,sans-serif;"
@@ -253,6 +274,7 @@ void handleRoot() {
 }
 
 void handleSave() {
+  s_portalActivityMs = ::millis();
   String ssid = s_web->arg("ssid");
   const String typed = s_web->arg("ssid2");
   if (!typed.isEmpty()) ssid = typed;
@@ -286,7 +308,8 @@ void handleSave() {
 // Every captive-portal probe (Apple, Android, Windows) must get a redirect, not a 204,
 // or the phone decides the network is fine and never opens the page.
 void handleCaptiveProbe() {
-  if (s_state == WifiState::Portal || s_state == WifiState::Scanning) {
+  if (wifiPortalOpen()) {
+    s_portalActivityMs = ::millis();
     String url = F("http://");
     url += kApIp.toString();
     url += F("/");
@@ -297,13 +320,30 @@ void handleCaptiveProbe() {
   s_web->send(404, "text/plain", "not found");
 }
 
+// Routes only: the socket is opened and closed by reconcileServer().
 void installHandlers() {
   if (s_handlersUp) return;
   s_web->on("/", handleRoot);
   s_web->on("/save", HTTP_POST, handleSave);
   s_web->onNotFound(handleCaptiveProbe);
-  s_web->begin();
   s_handlersUp = true;
+}
+
+// Port 80 listens exactly while the portal is open, or while a login is coming back
+// with the radio on. Called on the loop only, so begin/stop never race handleClient().
+void reconcileServer() {
+  const bool serve = wifiPortalOpen() || (s_webWindow && s_state != WifiState::Off);
+  if (serve == s_serverUp) return;
+  if (serve) {
+    if (!s_web) s_web = new WebServer(80);
+    installHandlers();
+    s_web->begin();
+    logLine("WIFI  port 80 open (%s)", wifiPortalOpen() ? "setup portal" : "a login is coming back");
+  } else {
+    s_web->stop();
+    logLine("WIFI  port 80 closed");
+  }
+  s_serverUp = serve;
 }
 
 // --- state transitions ---------------------------------------------------------------
@@ -318,6 +358,22 @@ void beginStation() {
   logLine("WIFI  connecting to '%s'", s_ssid);
 }
 
+void startStation() {
+  if (!s_haveCreds) {
+    if (!s_noCredsLogged) {
+      logLine("WIFI  a network job is waiting, but no network is stored: type wifi-portal");
+      s_noCredsLogged = true;
+    }
+    s_needed = false;
+    return;
+  }
+  logLine("WIFI  radio on: a network job needs '%s'", s_ssid);
+  WiFi.mode(WIFI_STA);
+  s_failures = 0;
+  s_retryMs = kRetryFirstMs;
+  beginStation();
+}
+
 void openPortal() {
   WiFi.mode(WIFI_AP_STA); // AP for the portal, STA so the scan has a radio to use
   WiFi.softAPConfig(kApIp, kApIp, kApMask);
@@ -325,27 +381,43 @@ void openPortal() {
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 4, 2)
   WiFi.AP.enableDhcpCaptivePortal(); // DHCP option 114, so modern phones pop the page
 #endif
-  if (!s_dns) s_dns = new DNSServer();
-  s_dns->setErrorReplyCode(DNSReplyCode::NoError);
-  s_dns->start(kDnsPort, "*", kApIp); // every name resolves to us
-  installHandlers();
+  s_dns.setErrorReplyCode(DNSReplyCode::NoError);
+  s_dnsUp = s_dns.start(kDnsPort, "*", kApIp); // every name resolves to us
   s_state = WifiState::Scanning;
-  s_portalOpenedMs = ::millis();
-  s_portalByUser = false; // wifiOpenPortal() sets it again straight after
+  s_portalActivityMs = ::millis();
+  s_portalCloseArmed = false;
   setDetail("Join '%s', then open any page", s_apSsid);
-  logLine("WIFI  portal open: SSID '%s', http://%s", s_apSsid, kApIp.toString().c_str());
+  logLine("WIFI  portal open: SSID '%s', http://%s - it closes after %lu min with no page asked",
+          s_apSsid, kApIp.toString().c_str(), static_cast<unsigned long>(kPortalIdleMs / 60000UL));
   startScan();
+  reconcileServer();
 }
 
+// Takes the AP and the DNS responder down. The caller decides what the radio does next.
 void closePortal() {
-  if (s_dns) {
-    s_dns->stop();
-    delete s_dns;
-    s_dns = nullptr;
+  if (s_dnsUp) {
+    s_dns.stop();
+    s_dnsUp = false;
   }
   WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_STA);
+  WiFi.scanDelete();
+  s_scanRunning = false;
+  s_portalCloseArmed = false;
   logLine("WIFI  portal closed");
+}
+
+void radioOff(const char* why) {
+  if (s_state == WifiState::Off) return;
+  if (wifiPortalOpen()) closePortal();
+  s_state = WifiState::Off;
+  reconcileServer(); // the socket closes while lwIP is still up
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_OFF);
+  s_failures = 0;
+  s_retryMs = kRetryFirstMs;
+  s_disconnectPending = false;
+  setOffDetail();
+  logLine("WIFI  radio off: %s", why);
 }
 
 void noteFailure(const char* why) {
@@ -354,15 +426,9 @@ void noteFailure(const char* why) {
   setDetail("%s (%s)", why, s_ssid);
   WiFi.disconnect(false, false);
   s_nextAttemptMs = ::millis() + s_retryMs;
-  logLine("WIFI  failed: %s - retry in %lu s (attempt %u)", why,
+  logLine("WIFI  failed: %s - retry in %lu s while a network job still wants it (attempt %u)", why,
           static_cast<unsigned long>(s_retryMs / 1000), static_cast<unsigned>(s_failures));
   s_retryMs = (s_retryMs * 2 > kRetryMaxMs) ? kRetryMaxMs : s_retryMs * 2;
-  if (s_failures >= kPortalAfterFailures) {
-    logLine("WIFI  %u failed attempts: reopening the portal", static_cast<unsigned>(s_failures));
-    s_failures = 0;
-    s_retryMs = kRetryFirstMs;
-    openPortal();
-  }
 }
 
 void noteOnline() {
@@ -374,44 +440,38 @@ void noteOnline() {
           static_cast<int>(WiFi.RSSI()));
 }
 
-} // namespace
-
-// --- public ---------------------------------------------------------------------------
-
-void wifiBegin() {
-  uint8_t mac[6] = {};
-  esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  snprintf(s_apSsid, sizeof(s_apSsid), "Arrocco-%02X%02X", mac[4], mac[5]);
-
-  if (!s_web) s_web = new WebServer(80);
-  WiFi.onEvent(onWifiEvent);
-  WiFi.persistent(false); // NVS is ours (Preferences), not the driver's shadow copy
-  loadCreds();
-
-  if (s_haveCreds) {
+void servicePortal(uint32_t now) {
+  // Signed difference: s_portalCloseAtMs is now + 1.5 s and may have wrapped past zero.
+  if (s_portalCloseArmed && static_cast<int32_t>(now - s_portalCloseAtMs) >= 0) {
+    closePortal();
     WiFi.mode(WIFI_STA);
-    installHandlers();
+    s_failures = 0;
+    s_retryMs = kRetryFirstMs;
+    wifiNeed(); // keep the station up a while: long enough to see that the network works
     beginStation();
-  } else {
-    logLine("WIFI  no stored network: opening the setup portal");
-    openPortal();
+    return;
   }
+  // Signed: the page handlers stamp the activity after `now` was read.
+  if (static_cast<int32_t>(now - s_portalActivityMs) >= static_cast<int32_t>(kPortalIdleMs)) {
+    char why[48];
+    snprintf(why, sizeof(why), "nobody used the portal for %lu min",
+             static_cast<unsigned long>(kPortalIdleMs / 60000UL));
+    radioOff(why); // a network job still waiting brings the station up at the next call
+    return;
+  }
+  if (!s_scanRunning && !apHasClient() &&
+      static_cast<int32_t>(now - s_lastScanMs) >= static_cast<int32_t>(kScanPeriodMs))
+    startScan();
 }
 
-void wifiService() {
-  if (s_state == WifiState::Off) return;
-  const uint32_t now = ::millis();
-
-  if (s_dns) s_dns->processNextRequest();
-  // handleClient() is NOT the couple of milliseconds this used to claim: the core sets the
-  // client timeout to HTTP_MAX_SEND_WAIT (5 s) and Parsing.cpp reads every request line
-  // with a blocking readStringUntil(), so one peer that opens a socket and then stalls
-  // mid-request freezes the loop task - the game, the clock and the touch with it - for
-  // seconds. It is worth paying while the portal is up or while an OAuth login is coming
-  // back, and worth nothing at all the rest of the time, so the rest of the time the
-  // server is simply not serviced.
-  if (s_handlersUp && (wifiPortalOpen() || s_webWindow)) s_web->handleClient();
-  pollScan();
+void serviceStation(uint32_t now) {
+  if (!stationWanted(now)) {
+    char why[48];
+    snprintf(why, sizeof(why), "no network job for %lu s",
+             static_cast<unsigned long>(kStationIdleOffMs / 1000UL));
+    radioOff(why);
+    return;
+  }
 
   if (s_disconnectPending && s_state != WifiState::Failed) {
     s_disconnectPending = false;
@@ -429,34 +489,6 @@ void wifiService() {
   }
 
   switch (s_state) {
-    case WifiState::Scanning:
-    case WifiState::Portal:
-      // Signed difference: s_portalCloseAtMs is now + 1.5 s and may have wrapped past
-      // zero, and a plain >= would then wait 49 days instead of a second and a half.
-      if (s_portalCloseArmed && static_cast<int32_t>(now - s_portalCloseAtMs) >= 0) {
-        s_portalCloseArmed = false;
-        closePortal();
-        s_failures = 0;
-        s_retryMs = kRetryFirstMs;
-        beginStation();
-        break;
-      }
-      // Nobody has joined in five minutes and we still know a network: stop holding the
-      // AP up and give that network another go. A router coming back from a reboot is the
-      // common case, and it must not need a human.
-      if (s_haveCreds && !s_portalByUser && !apHasClient() &&
-          now - s_portalOpenedMs >= kPortalIdleGiveUpMs) {
-        logLine("WIFI  nobody joined the portal in %lu min: trying '%s' again",
-                static_cast<unsigned long>(kPortalIdleGiveUpMs / 60000UL), s_ssid);
-        closePortal();
-        s_failures = 0;
-        s_retryMs = kRetryFirstMs;
-        beginStation();
-        break;
-      }
-      if (!s_scanRunning && !apHasClient() && now - s_lastScanMs >= kScanPeriodMs) startScan();
-      break;
-
     case WifiState::Connecting:
       if (WiFi.status() == WL_CONNECTED && static_cast<uint32_t>(WiFi.localIP()) != 0) {
         noteOnline();
@@ -479,8 +511,50 @@ void wifiService() {
       break;
 
     case WifiState::Off:
+    case WifiState::Scanning:
+    case WifiState::Portal:
       break;
   }
+}
+
+} // namespace
+
+// --- public ---------------------------------------------------------------------------
+
+void wifiBegin() {
+  uint8_t mac[6] = {};
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  snprintf(s_apSsid, sizeof(s_apSsid), "Arrocco-%02X%02X", mac[4], mac[5]);
+
+  if (!s_web) s_web = new WebServer(80); // routes are added now, the socket only when needed
+  WiFi.onEvent(onWifiEvent);
+  WiFi.persistent(false); // NVS is ours (Preferences), not the driver's shadow copy
+  loadCreds();
+  s_state = WifiState::Off;
+  setOffDetail();
+  if (s_haveCreds)
+    logLine("WIFI  radio off; network '%s' stored, joined only when a network job needs it", s_ssid);
+  else
+    logLine("WIFI  radio off; no network stored ('wifi-portal' opens the setup portal)");
+}
+
+void wifiService() {
+  const uint32_t now = ::millis();
+  if (s_state == WifiState::Off) {
+    if (stationWanted(now)) startStation();
+    reconcileServer();
+    return;
+  }
+  reconcileServer();
+  // handleClient() is NOT the couple of milliseconds it may look like: the core sets the
+  // client timeout to HTTP_MAX_SEND_WAIT (5 s) and Parsing.cpp reads every request line
+  // with a blocking readStringUntil(), so one peer that opens a socket and then stalls
+  // mid-request freezes the loop task for seconds. The server exists only inside the
+  // portal and login windows, so that is the only time this can happen.
+  if (s_serverUp) s_web->handleClient();
+  pollScan();
+  if (wifiPortalOpen()) servicePortal(now);
+  else serviceStation(now);
 }
 
 WifiState wifiState() { return s_state; }
@@ -501,28 +575,54 @@ const char* wifiDetail() { return s_detail; }
 bool wifiOnline() { return s_state == WifiState::Online; }
 bool wifiPortalOpen() { return s_state == WifiState::Portal || s_state == WifiState::Scanning; }
 bool wifiHasCredentials() { return s_haveCreds; }
+bool wifiBusy() { return s_state != WifiState::Off; }
 const char* wifiApSsid() { return s_apSsid; }
 
 IPAddress wifiIp() { return wifiPortalOpen() ? kApIp : WiFi.localIP(); }
 
+void wifiNeed() {
+  s_needMs = ::millis();
+  s_needed = true;
+}
+
+bool wifiWaitOnline(uint32_t timeoutMs) {
+  const uint32_t t0 = ::millis();
+  for (;;) {
+    wifiNeed();
+    if (wifiOnline()) return true;
+    if (!s_haveCreds || ::millis() - t0 >= timeoutMs) return false;
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
+
+void wifiRadioOff(const char* why) {
+  s_needed = false;
+  radioOff(why);
+}
+
 void wifiForget() {
   wipeCreds();
   logLine("WIFI  stored network forgotten");
-  WiFi.disconnect(false, false);
+  if (wifiPortalOpen()) {
+    s_portalActivityMs = ::millis();
+    return;
+  }
+  if (s_state != WifiState::Off) WiFi.disconnect(false, false);
   s_failures = 0;
   s_retryMs = kRetryFirstMs;
   openPortal();
 }
 
 void wifiOpenPortal() {
-  if (wifiPortalOpen()) return;
-  WiFi.disconnect(false, false);
+  if (wifiPortalOpen()) {
+    s_portalActivityMs = ::millis();
+    logLine("WIFI  the portal is already open: '%s', http://%s", s_apSsid, kApIp.toString().c_str());
+    return;
+  }
+  if (s_state != WifiState::Off) WiFi.disconnect(false, false);
   s_failures = 0;
   s_retryMs = kRetryFirstMs;
   openPortal();
-  // Asked for on purpose (moving the board to another network): it waits as long as it
-  // takes, instead of quietly rejoining the network the user is trying to leave.
-  s_portalByUser = true;
 }
 
 WebServer& web() {
@@ -533,7 +633,7 @@ WebServer& web() {
 void wifiWebWindow(bool open) {
   if (s_webWindow == open) return;
   s_webWindow = open;
-  logLine("WIFI  http server %s", open ? "serving (login in progress)" : "idle");
+  logLine("WIFI  login window %s", open ? "open: port 80 answers while it lasts" : "closed");
 }
 
 bool wifiWebWindowOpen() { return s_webWindow; }

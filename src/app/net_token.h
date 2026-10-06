@@ -47,6 +47,9 @@ enum class OauthState : uint8_t {
 bool oauthBegin(char* urlOut, size_t urlSize);
 
 void oauthCancel();       // forgets the verifier; the callback then answers "expired"
+// Loop task, every loop: a login still waiting for the phone after 10 minutes is given up
+// (Failed), which closes the login window and lets the radio go off.
+void oauthPoll(uint32_t now);
 OauthState oauthState();
 const char* oauthStateText();
 const char* oauthError();  // "" unless Failed; never contains the code or the token

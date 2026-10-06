@@ -25,6 +25,9 @@ constexpr char kScope[] = "board:play";
 constexpr char kCallbackPath[] = "/oauth/callback";
 
 constexpr size_t kVerifierLen = 64; // 43..128 per RFC 7636; 64 is comfortably inside
+// A login nobody finishes must not keep the radio and port 80 up for ever: after this
+// long without the phone coming back, it is abandoned like oauth-cancel would.
+constexpr uint32_t kWaitForPhoneMs = 10UL * 60UL * 1000UL;
 
 char s_token[kTokenMax] = {};
 bool s_tokenLoaded = false;
@@ -39,6 +42,17 @@ char s_state[33] = {};
 char s_code[512] = {};    // the authorization code: as secret as the token, never logged
 char s_redirect[64] = {};
 bool s_handlerRegistered = false;
+uint32_t s_waitingSinceMs = 0;
+
+// The exchange's working buffers, ~2.3 KB together. They used to be locals of
+// oauthService(), on the 6 KB stack of the console worker that also runs the TLS
+// handshake inside requestBlocking(). Only one exchange ever runs at a time, on that one
+// task; every one of them is wiped after use, as before.
+char s_exCodeEnc[600];
+char s_exRedirectEnc[128];
+char s_exBody[900];
+char s_exReply[512];
+char s_exToken[kTokenMax];
 
 // --- storage --------------------------------------------------------------------------
 
@@ -289,9 +303,17 @@ bool oauthBegin(char* urlOut, size_t urlSize) {
   }
   s_oauthError[0] = '\0';
   s_oauthState = OauthState::Waiting;
+  s_waitingSinceMs = ::millis();
   wifiWebWindow(true); // from here until the code lands, port 80 has to be answered
-  logLine("OAUTH waiting: scan the QR, the phone comes back to %s", s_redirect);
+  logLine("OAUTH waiting: scan the QR, the phone comes back to %s (given up after %lu min)", s_redirect,
+          static_cast<unsigned long>(kWaitForPhoneMs / 60000UL));
   return true;
+}
+
+void oauthPoll(uint32_t now) {
+  if (s_oauthState != OauthState::Waiting) return;
+  if (static_cast<int32_t>(now - s_waitingSinceMs) < static_cast<int32_t>(kWaitForPhoneMs)) return;
+  fail("the phone did not come back in time"); // closes the login window: the radio may go off
 }
 
 void oauthCancel() {
@@ -323,37 +345,35 @@ void oauthService() {
   if (s_oauthState != OauthState::Exchanging) return;
 
   // The body carries the code and the verifier: a POST form, never a query string.
-  char codeEnc[600];
-  char redirectEnc[128];
-  if (!urlEncode(s_code, codeEnc, sizeof(codeEnc)) ||
-      !urlEncode(s_redirect, redirectEnc, sizeof(redirectEnc))) {
+  // The buffers are file-scope (see their declaration), wiped as soon as they are done.
+  if (!urlEncode(s_code, s_exCodeEnc, sizeof(s_exCodeEnc)) ||
+      !urlEncode(s_redirect, s_exRedirectEnc, sizeof(s_exRedirectEnc))) {
+    memset(s_exCodeEnc, 0, sizeof(s_exCodeEnc));
     fail("could not build the exchange request");
     return;
   }
-  char body[900];
-  const int n = snprintf(body, sizeof(body),
+  const int n = snprintf(s_exBody, sizeof(s_exBody),
                          "grant_type=authorization_code&code=%s&code_verifier=%s"
                          "&redirect_uri=%s&client_id=%s",
-                         codeEnc, s_verifier, redirectEnc, kClientId);
-  memset(codeEnc, 0, sizeof(codeEnc));
-  if (n < 0 || static_cast<size_t>(n) >= sizeof(body)) {
-    memset(body, 0, sizeof(body));
+                         s_exCodeEnc, s_verifier, s_exRedirectEnc, kClientId);
+  memset(s_exCodeEnc, 0, sizeof(s_exCodeEnc));
+  if (n < 0 || static_cast<size_t>(n) >= sizeof(s_exBody)) {
+    memset(s_exBody, 0, sizeof(s_exBody));
     fail("the exchange request does not fit");
     return;
   }
 
-  char reply[512];
-  const int status = requestBlocking("POST", "/api/token", body, reply, sizeof(reply), false);
-  memset(body, 0, sizeof(body));
+  const int status = requestBlocking("POST", "/api/token", s_exBody, s_exReply, sizeof(s_exReply), false);
+  memset(s_exBody, 0, sizeof(s_exBody));
   memset(s_code, 0, sizeof(s_code));
 
   if (status != 200) {
     char why[48] = {};
-    if (status > 0 && jsonString(reply, "error", why, sizeof(why)))
+    if (status > 0 && jsonString(s_exReply, "error", why, sizeof(why)))
       snprintf(s_oauthError, sizeof(s_oauthError), "Lichess said: %s", why);
     else
       snprintf(s_oauthError, sizeof(s_oauthError), "token exchange returned %d", status);
-    memset(reply, 0, sizeof(reply));
+    memset(s_exReply, 0, sizeof(s_exReply));
     s_oauthState = OauthState::Failed;
     memset(s_verifier, 0, sizeof(s_verifier));
     wifiWebWindow(false);
@@ -361,16 +381,15 @@ void oauthService() {
     return;
   }
 
-  char token[kTokenMax];
-  const bool got = jsonString(reply, "access_token", token, sizeof(token));
-  memset(reply, 0, sizeof(reply)); // the token was in there too
+  const bool got = jsonString(s_exReply, "access_token", s_exToken, sizeof(s_exToken));
+  memset(s_exReply, 0, sizeof(s_exReply)); // the token was in there too
   memset(s_verifier, 0, sizeof(s_verifier));
-  if (!got || !tokenSave(token)) {
-    memset(token, 0, sizeof(token));
+  if (!got || !tokenSave(s_exToken)) {
+    memset(s_exToken, 0, sizeof(s_exToken));
     fail("no usable token in the reply");
     return;
   }
-  memset(token, 0, sizeof(token));
+  memset(s_exToken, 0, sizeof(s_exToken));
   s_oauthState = OauthState::Done;
   s_oauthError[0] = '\0';
   wifiWebWindow(false); // the phone already has its "you can close this page"
