@@ -124,6 +124,14 @@ Screen& ChessApp::current() {
 
 void ChessApp::begin() {
   restoreGame();
+  if (wakeIntoGame_ && ctx_.gameInProgress()) {
+    // The clock stays as it was: the board never goes to sleep while one counts down.
+    // The panel was hibernated, so its first refresh is a Full one anyway.
+    screenId_ = ScreenId::Game;
+    current().enter();
+    present(Refresh::Full);
+    return;
+  }
   screenId_ = ScreenId::Menu;
   current().enter();
   present(kBootRefresh);

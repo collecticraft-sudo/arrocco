@@ -22,6 +22,9 @@ namespace power {
 void begin();
 void logBoot();
 bool wokeFromSleep();  // this boot is a deep-sleep wake, whatever woke it
+// A touch woke the board from a sleep that began with a game on the glass: the app should
+// go straight back to that game instead of its menu.
+bool wakeIntoGame();
 
 // A touch or a serial command: the idle time starts again.
 void noteActivity(uint32_t now);
@@ -33,6 +36,7 @@ struct Blockers {
   bool clockRunning;    // a game clock is counting down
   bool network;         // the radio is on: a request, a stream, the portal or a login
   bool cannotWake;      // the touch controller could not wake the board: never sleep
+  bool gameOnScreen;    // not a blocker: the sleep keeps the board in view, the wake goes back to it
 };
 
 // Call every loop. Once a second it asks `query` what is running; when the idle time is
@@ -42,7 +46,8 @@ using BlockerQuery = Blockers (*)(uint32_t now);
 void service(uint32_t now, BlockerQuery query);
 
 // The sleep itself: sleep screen, panel hibernate, radio off, pins prepared, ext0 on INT.
-[[noreturn]] void sleepNow(const char* why);
+// keepScreen: a game is on the glass; it stays there under a small note (see sleep_screen.h).
+[[noreturn]] void sleepNow(const char* why, bool keepScreen);
 
 // Serial commands: sleep-status, sleep-now, sleep-after <seconds>.
 bool consoleCommand(const char* verb, char* rest);

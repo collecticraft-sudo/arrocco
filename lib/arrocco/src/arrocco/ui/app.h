@@ -42,6 +42,10 @@ class ChessApp final : public arrocco::App {
   // begin() then does not offer a saved game against the engine.
   void setEngine(Engine* engine) { ctx_.engine = engine; }
 
+  // Call before begin(): a touch woke the board from a sleep that began on the game screen.
+  // begin() then goes straight back to the saved game instead of the menu.
+  void wakeIntoGame() { wakeIntoGame_ = true; }
+
   void begin() override;
   void onTouch(const TouchEvent& e) override;
   void tick() override;
@@ -75,6 +79,7 @@ class ChessApp final : public arrocco::App {
   GameScreen game_screen_;
   GameOverScreen gameOver_;
   ScreenId screenId_ = ScreenId::Menu;
+  bool wakeIntoGame_ = false;
 
   bool touchDown_ = false;
   int16_t downX_ = 0;

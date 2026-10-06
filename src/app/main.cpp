@@ -332,6 +332,7 @@ power::Blockers blockers(uint32_t now) {
   b.clockRunning = clock.enabled() && clock.running() && !clock.timedOut(clock.runningSide(), now);
   b.network = net::wifiBusy();
   b.cannotWake = !gt911::canWake();
+  b.gameOnScreen = s_app.currentScreen() == arrocco::ui::ScreenId::Game && !s_app.game().isOver();
   return b;
 }
 
@@ -450,6 +451,7 @@ void setup() {
   s_lastEdges = gt911::intEdges();
   s_platform.markEvent(now);
   s_cause = RefreshCause{touch_policy::Origin::Boot, snapshot(), false, true};
+  if (power::wakeIntoGame()) s_app.wakeIntoGame(); // the board fell asleep on a game: back to it
   s_app.begin(); // draws and presents the first screen
   handleRefreshes();
   s_platform.beep(880, 60); // the first screen is on the panel

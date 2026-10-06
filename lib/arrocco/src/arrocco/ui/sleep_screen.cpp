@@ -22,13 +22,14 @@ namespace arrocco::ui {
 
 bool sleepPictureAvailable() { return ARROCCO_SLEEP_ART != 0; }
 
-SleepScreen drawSleepScreen(Adafruit_GFX& gfx) {
+SleepScreen drawSleepScreen(Adafruit_GFX& gfx, bool keepScreen) {
   // Called outside ChessApp::present(), which is what normally sets these: drawCentered()
   // does not, and GFX starts out with white text.
   gfx.setTextWrap(false);
   gfx.setTextSize(1);
   gfx.setTextColor(kBlack);
 #if ARROCCO_SLEEP_ART
+  if (!keepScreen) {
   static_assert(art::kSleepArtW == arrocco::kScreenW && art::kSleepArtH == arrocco::kScreenH,
                 "the sleep picture must cover the whole panel");
   gfx.fillScreen(kWhite);
@@ -39,11 +40,13 @@ SleepScreen drawSleepScreen(Adafruit_GFX& gfx) {
   drawCentered(gfx, Font::Sans9, str::kSleepArtCredit, kSleepLabelBox.cx(),
                static_cast<int16_t>(kSleepLabelBox.y + kSleepLabelLine2));
   return SleepScreen::Picture;
+  }
 #else
+  (void)keepScreen;
+#endif
   drawBox(gfx, kSleepNoteBox);
   drawCentered(gfx, Font::Bold12, str::kSleepNote, kSleepNoteBox.cx(), kSleepNoteBox.cy());
   return SleepScreen::Note;
-#endif
 }
 
 }  // namespace arrocco::ui

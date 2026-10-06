@@ -26,6 +26,8 @@ bool sleepPictureAvailable();
 // white "Tap to wake" label (and the picture's credit) in the bottom-right corner. Note:
 // "Asleep. Tap to wake." in a framed box over the top of the side column, the rest of the
 // screen left as it was, so the board still shows the game it fell asleep on.
-SleepScreen drawSleepScreen(Adafruit_GFX& gfx);
+// keepScreen: a game is on the glass. Always the note then, so the position stays in view
+// through the sleep (e-paper holds it for free); the picture is for every other screen.
+SleepScreen drawSleepScreen(Adafruit_GFX& gfx, bool keepScreen = false);
 
 }  // namespace arrocco::ui

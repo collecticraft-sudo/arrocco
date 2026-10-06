@@ -18,7 +18,7 @@
 namespace power {
 namespace {
 
-constexpr uint32_t kRtcMagic = 0xA770CC05u;
+constexpr uint32_t kRtcMagic = 0xA770CC06u; // 06: sleptInGame
 constexpr uint32_t kCheckEveryMs = 1000;      // the idle check needs no finer grain
 constexpr uint32_t kSleepAfterMinMs = 10000;  // below this the board could hardly be used
 
@@ -32,8 +32,9 @@ struct RtcState {
   uint64_t sleptAtUs;    // RTC clock when the last one began
   uint32_t lastAsleepS;  // how long the last one lasted
   uint32_t sleepAfterMs; // idle time before sleeping, 0 = never
+  uint32_t sleptInGame;  // the last sleep began with a game on the glass
 };
-RTC_DATA_ATTR RtcState s_rtc = {0, 0, 0, 0, 0, 0, 0};
+RTC_DATA_ATTR RtcState s_rtc = {0, 0, 0, 0, 0, 0, 0, 0};
 
 esp_reset_reason_t s_reset = ESP_RST_UNKNOWN;
 esp_sleep_wakeup_cause_t s_cause = ESP_SLEEP_WAKEUP_UNDEFINED;
@@ -41,7 +42,7 @@ bool s_woke = false;
 uint32_t s_lastActivityMs = 0;
 uint32_t s_lastCheckMs = 0;
 uint8_t s_reported = 0xFF; // blocker bits last logged; 0xFF = none logged since the timer restarted
-Blockers s_last = {false, false, false, false, false};
+Blockers s_last = {false, false, false, false, false, false};
 char s_status[96] = "";
 
 uint8_t blockerBits(const Blockers& b) {
@@ -117,7 +118,7 @@ void begin() {
   s_woke = (s_reset == ESP_RST_DEEPSLEEP);
   s_cause = s_woke ? esp_sleep_get_wakeup_cause() : ESP_SLEEP_WAKEUP_UNDEFINED;
   if (s_rtc.magic != kRtcMagic || s_reset == ESP_RST_POWERON)
-    s_rtc = RtcState{kRtcMagic, 0, 0, 0, 0, 0, cfg::kSleepAfterIdleMs};
+    s_rtc = RtcState{kRtcMagic, 0, 0, 0, 0, 0, cfg::kSleepAfterIdleMs, 0};
   if (s_woke) {
     const uint64_t nowUs = esp_rtc_get_time_us(); // the RTC timer runs on through deep sleep
     s_rtc.lastAsleepS =
@@ -143,6 +144,8 @@ void logBoot() {
 
 bool wokeFromSleep() { return s_woke; }
 
+bool wakeIntoGame() { return s_woke && s_cause == ESP_SLEEP_WAKEUP_EXT0 && s_rtc.sleptInGame != 0; }
+
 void noteActivity(uint32_t now) { s_lastActivityMs = now; }
 
 void service(uint32_t now, BlockerQuery query) {
@@ -166,10 +169,10 @@ void service(uint32_t now, BlockerQuery query) {
     }
     return;
   }
-  sleepNow("nothing touched and nothing running");
+  sleepNow("nothing touched and nothing running", blockers.gameOnScreen);
 }
 
-void sleepNow(const char* why) {
+void sleepNow(const char* why, bool keepScreen) {
   const uint32_t t0 = millis();
   logLine("SLEEP %s: sleep screen, then deep sleep until a touch", why);
   // From here no touch report may be read: one made during the last refresh must stay
@@ -177,7 +180,7 @@ void sleepNow(const char* why) {
   panel::setBusyHook(nullptr);
   net::wifiRadioOff("going to sleep");
 
-  const arrocco::ui::SleepScreen screen = arrocco::ui::drawSleepScreen(panel::display);
+  const arrocco::ui::SleepScreen screen = arrocco::ui::drawSleepScreen(panel::display, keepScreen);
   panel::refresh(screen == arrocco::ui::SleepScreen::Picture ? panel::Kind::Full : panel::Kind::Partial, 0);
   panel::hibernate();
   gt911::prepareForDeepSleep();
@@ -200,9 +203,10 @@ void sleepNow(const char* why) {
 
   ++s_rtc.sleeps;
   s_rtc.sleptAtUs = esp_rtc_get_time_us();
+  s_rtc.sleptInGame = keepScreen ? 1u : 0u;
   logLine("SLEEP #%lu: down after %lu ms (%s)%s", static_cast<unsigned long>(s_rtc.sleeps),
           static_cast<unsigned long>(millis() - t0),
-          screen == arrocco::ui::SleepScreen::Picture ? "picture" : "note over the last screen",
+          screen == arrocco::ui::SleepScreen::Picture ? "picture" : (keepScreen ? "note over the game" : "note over the last screen"),
           gt911::intHigh() ? "" : " - INT is LOW, a touch is waiting: the board wakes again at once");
   Serial.flush();
   delay(20);
@@ -220,7 +224,7 @@ bool consoleCommand(const char* verb, char* rest) {
               "line never proven)");
       return true;
     }
-    sleepNow("asked on the serial console");
+    sleepNow("asked on the serial console", s_last.gameOnScreen);
   }
   if (strcmp(verb, "sleep-after") == 0) {
     char* end = nullptr;
