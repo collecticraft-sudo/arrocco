@@ -69,7 +69,7 @@ Le righe della colonna, dall'alto:
 
 | Riga | Cosa c'è scritto | Cosa vuol dire |
 |---|---|---|
-| 1 | `Arrocco hwtest 0.3` | versione |
+| 1 | `Arrocco hwtest 0.4` | versione |
 | 2 | `Touch OK 0x5D id 911` | touch trovato, fili RST e INT provati |
 | | `TOUCH WARN 0x.. id 911` | il touch risponde ma c'è un difetto: leggi la riga 3 |
 | | `TOUCH FAIL no answer` | nessuna risposta sull'I2C: leggi la riga 3 |
@@ -95,7 +95,7 @@ Le righe della colonna, dall'alto:
 
 Regole del firmware, utili per capire cosa vedi: **un refresh per ogni tocco**; dopo 16 parziali fa un refresh completo alla prima pausa di 1,5 s (al più tardi dopo 32); dopo 3 s senza tocchi spegne l'alta tensione del pannello (`PANEL power off after idle`), e il refresh seguente dura circa 0,15 s in più. I tocchi fatti mentre lo schermo si aggiorna vengono buttati.
 
-**Se il touch è morto** si comanda dal monitor seriale: `b` `t` `p` `s` cambiano schermata, `r` refresh parziale, `f` completo, `i` rapporto, `?` aiuto.
+**Se il touch è morto** si comanda dal monitor seriale: `b` `t` `p` `s` cambiano schermata, `k` tutto nero, `w` tutto bianco, `r` refresh parziale, `f` completo, `i` rapporto, `?` aiuto.
 
 **Tappa 0 — XIAO da solo.**
 Solo XIAO e cavo USB-C. Non servono i pin saldati. Carica il firmware e apri il monitor.
@@ -108,7 +108,7 @@ A corrente staccata: XIAO nello zoccolo (**USB-C dal lato opposto al flat**, con
 - Sul seriale deve comparire `PANEL BUSY pin is driven HIGH (idle): a panel is connected`.
 - Lo schermo fa un lampo nero e disegna la schermata Touch. `TOUCH FAIL no answer` e `SDA+SCL low: 3V3 missing?` qui sono normali: il touch non è collegato.
 - Dal monitor premi `p` (schermata **Panel**): sei riquadri `12.5%`, `25%`, `37.5%`, `50%`, `hatch`, `solid`, ognuno con un pezzo bianco e uno nero. Devono essere uniformi e nitidi.
-- Il nero pieno e il bianco pieno si provano coi pulsanti `All black` e `All white`, quindi alla tappa 2, quando il touch funziona. Devono essere puliti, senza puntini né "neve". Un tocco qualsiasi riporta ai riquadri.
+- Il nero pieno e il bianco pieno: dal monitor `k` (tutto nero) e `w` (tutto bianco), oppure, quando il touch funziona, coi pulsanti `All black` e `All white`. Devono essere puliti, senza puntini né "neve". `p`, o un tocco qualsiasi, riporta ai riquadri.
 - Tempi: ogni refresh scrive sul seriale `REFRESH partial #n: ... ms, of which BUSY wait ... ms`. Il numero da confrontare è **BUSY wait**: atteso circa 450 ms il parziale, 1100–1300 ms il completo (più circa 150 ms se il pannello era spento). Il totale è più lungo: c'è il tempo per spedire l'immagine. Annota tutti e due.
 
 **Tappa 2 — Touch.**

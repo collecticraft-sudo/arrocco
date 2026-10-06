@@ -410,6 +410,13 @@ void show(Id id) {
   logLine("SCREEN %s", name(id));
 }
 
+void fill(bool black) {
+  show(Id::Panel);
+  s_fill = black ? Fill::Black : Fill::White;
+  setStatus("tap anywhere to go back");
+  logLine("SCREEN Panel, all %s: look for specks or \"snow\"", black ? "black" : "white");
+}
+
 Id current() { return s_id; }
 const char* name(Id id) { return kNames[static_cast<uint8_t>(id)]; }
 

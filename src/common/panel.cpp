@@ -59,6 +59,14 @@ void begin() {
   // No MISO on this panel, and GPIO8 belongs to the touch INT: pins must be set
   // before display.init(), whose own SPI.begin() then becomes a no-op.
   SPI.begin(cfg::kEpdSck, -1, cfg::kEpdMosi, -1);
+  // GxEPD2 writes CS, DC and RST before making them outputs. The ESP32 Arduino core 3
+  // drops a write to a pin that is not a GPIO yet and logs an error for it, so they
+  // become outputs at their idle level first (the brief LOW on RST is a reset anyway).
+  const uint8_t ctrlPins[] = {cfg::kEpdCs, cfg::kEpdDc, cfg::kEpdRst};
+  for (const uint8_t pin : ctrlPins) {
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, HIGH);
+  }
   // Serial diagnostics on (prints _PowerOn / _Update_Full / _Update_Part in microseconds),
   // initial = true, 10 ms reset pulse (RST is wired straight to the FPC), no pulldown mode.
   display.epd2.setBusyCallback(onBusy, nullptr);

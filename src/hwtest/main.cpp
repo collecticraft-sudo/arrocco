@@ -254,10 +254,13 @@ void pollSerialKeys() {
       case 't': screens::show(screens::Id::Touch); s_dirty = true; break;
       case 'p': screens::show(screens::Id::Panel); s_dirty = true; break;
       case 's': screens::show(screens::Id::Sound); s_dirty = true; break;
+      case 'k': screens::fill(true); s_dirty = true; s_wantFull = true; break;
+      case 'w': screens::fill(false); s_dirty = true; s_wantFull = true; break;
       case 'r': s_dirty = true; break;
       case 'f': s_dirty = true; s_wantFull = true; break;
       case 'i': bootReport(); statusReport(); break;
-      case '?': logLine("KEYS  b/t/p/s = Board/Touch/Panel/Sound, r = partial refresh, f = full, i = report"); break;
+      case '?': logLine("KEYS  b/t/p/s = Board/Touch/Panel/Sound, k/w = all black/all white, r = partial refresh, "
+                         "f = full, i = report"); break;
       default: break; // CR, LF and anything else
     }
     s_lastActivityMs = millis();

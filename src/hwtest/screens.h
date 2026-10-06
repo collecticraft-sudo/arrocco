@@ -21,6 +21,9 @@ struct TouchPoint {
 
 void begin();
 void show(Id id);
+// The Panel screen's "All black" / "All white" page, also reachable from the serial
+// keys k and w so it can be checked before the touch works.
+void fill(bool black);
 Id current();
 const char* name(Id id);
 
