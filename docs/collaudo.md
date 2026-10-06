@@ -69,7 +69,7 @@ Le righe della colonna, dall'alto:
 
 | Riga | Cosa c'è scritto | Cosa vuol dire |
 |---|---|---|
-| 1 | `Arrocco hwtest 0.4` | versione |
+| 1 | `Arrocco hwtest 0.5` | versione |
 | 2 | `Touch OK 0x5D id 911` | touch trovato, fili RST e INT provati |
 | | `TOUCH WARN 0x.. id 911` | il touch risponde ma c'è un difetto: leggi la riga 3 |
 | | `TOUCH FAIL no answer` | nessuna risposta sull'I2C: leggi la riga 3 |
@@ -112,7 +112,7 @@ A corrente staccata: XIAO nello zoccolo (**USB-C dal lato opposto al flat**, con
 - Tempi: ogni refresh scrive sul seriale `REFRESH partial #n: ... ms, of which BUSY wait ... ms`. Il numero da confrontare è **BUSY wait**: atteso circa 450 ms il parziale, 1100–1300 ms il completo (più circa 150 ms se il pannello era spento). Il totale è più lungo: c'è il tempo per spedire l'immagine. Annota tutti e due.
 
 **Tappa 2 — Touch.**
-A corrente staccata: FTS02 collegato come in `wiring.md` §5, flat del touch in P7 **girato**. Poi USB.
+A corrente staccata: FTS02 collegato come in `wiring.md` §5, flat del touch in P7 **girato** e **senza prolunga**: con la prolunga del flat a 24 pin in mezzo il GT911 non risponde (provato il 06/10/2026). Poi USB.
 - Riga 2 della colonna: `Touch OK 0x5D id 911`. Sul seriale: `TOUCH address test: asked 0x5D, 0x14, 0x5D -> got 0x5D, 0x14, 0x5D: RST and INT wires proven`. Questa prova dice che i fili RST e INT lavorano davvero.
 - **Se c'è `TOUCH FAIL no answer`: stacca subito la USB**, gira il flat, riprova. (Il firmware riprova da solo ogni 2 secondi, ma il flat si gira a corrente staccata.)
 - Tocca i bersagli **1, 2, 3, 4 in ordine** (alto-sinistra, alto-destra, basso-sinistra, basso-destra). A ogni tocco compare un mirino dove il firmware crede che tu abbia toccato; un bersaglio centrato diventa nero.
@@ -146,7 +146,7 @@ Breakout FPC con le tre resistenze al posto del FTS02 (`wiring.md` §7), poi MAX
 | Puntini sparsi o "neve" su `All black` | driver board del lotto difettoso di gennaio 2025 | non è il firmware: foto, codice lotto, e si chiede la sostituzione |
 | `BUSY wait` del parziale intorno a **1500 ms** invece di 450 | pannello di un lotto vecchio (forma d'onda diversa in memoria) | non è un guasto: mandami il numero, si sistema nel firmware |
 | L'immagine sbiadisce o il XIAO si riavvia durante un refresh; al riavvio il seriale dice `BROWNOUT` | 3,3 V che cede | cavo USB migliore o altra porta; a batteria: cella scarica |
-| `TOUCH FAIL no answer` + `no answer: flat? RST wire?` | flat del touch nel verso sbagliato (caso più probabile) | **stacca subito**, gira il flat. Poi: presa sbagliata (P6 invece di P7), linguetta aperta, filo `A3`→`D6` |
+| `TOUCH FAIL no answer` + `no answer: flat? RST wire?` | flat del touch nel verso sbagliato, o con la prolunga in mezzo | **stacca subito**, togli la prolunga, gira il flat. Poi: presa sbagliata (P6 invece di P7), linguetta aperta, filo `A3`→`D6` |
 | `TOUCH FAIL no answer` + `SDA+SCL low: 3V3 missing?` | al touch non arrivano i 3,3 V | `3.3V` e `GND` di P11 (non `5V`!) |
 | `TOUCH FAIL no answer` + `SDA low` oppure `SCL low` | manca un filo dell'I2C | `A4`→`D4` (SDA), `A5`→`D5` (SCL); non i pin `SDA`/`SCL` di P8; saldature di CN1/CN2 opache o a pallina: ripassale |
 | `TOUCH WARN` + `swap the A4/A5 wires` | SDA e SCL scambiati | scambia i due fili |
@@ -180,3 +180,17 @@ Copia e incolla questa lista con le risposte. La cosa più utile: **tutto il log
 13. Col multimetro, in ohm: resistenza del KY-006 tra `S` e `−` (circuito aperto = piezo; circa 16 Ω = magnetico).
 14. Col multimetro, a tutto spento e con i Dupont staccati, sul FTS02 con il flat del touch inserito: ohm tra `A4` e `3.3V`, tra `A5` e `3.3V`, tra `A3` e `3.3V`. Serve a capire se il flat ha già le sue resistenze di pull-up: il FTS02 da solo dà circa 10 kΩ sulle prime due e circuito aperto sulla terza; valori più bassi vogliono dire che il flat ne ha di sue.
 15. Più avanti, col multimetro in serie alla batteria (portata µA/mA): consumo con la scheda "addormentata".
+
+## F. Il primo collaudo vero (06/10/2026)
+
+| Cosa | Risultato |
+|---|---|
+| XIAO | ESP32-S3 rev 0.2, flash 16 MB, PSRAM 8 MB: è un Plus |
+| Pannello | risponde; refresh completo 1,58 s di aggiornamento (1,75 s di BUSY con l'accensione), parziale 0,42 s |
+| Tutto nero / tutto bianco | puliti, niente puntini |
+| Touch | GT911 a `0x5D`, id `911`, firmware `0x1060`, configurazione v65, 800×480, 5 tocchi; fili RST e INT provati |
+| Assi del touch | giusti senza correzioni (`SWAP_XY 0`, `MIRROR_X 0`, `MIRROR_Y 0`): il chip scambia già X e Y da solo (`Module_Switch1 0x3D`) |
+| Filo INT | il GT911 qui abbassa INT a ogni rapporto (fronte di discesa) e serve una resistenza verso l'alto: dalla 0.5 la mette l'ESP32. Con quella verso il basso il filo risultava provato ma senza impulsi |
+| Flat del touch | va dritto in P7: con la prolunga in mezzo non risponde |
+| Buzzer | suona all'avvio |
+| Ancora da fare | batteria (serve il multimetro), MAX17048, codice lotto della driver board, misure col calibro |

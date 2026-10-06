@@ -106,6 +106,8 @@ P11:   5V  3.3V 3.3V  GND  GND  RESET  A19  A18
 
 Per ricordarlo: **A4 con D4, A5 con D5**.
 
+Il flat del touch va dritto nella presa, **senza prolunga**: con la prolunga del flat a 24 pin in mezzo il GT911 non risponde (provato il 06/10/2026).
+
 Le due trappole:
 - **Mai il pin `5V` di P11.** È attaccato ai due `3.3V`: conta i pin prima di infilare il filo. Il touch regge al massimo 3,6 V.
 - **Mai i pin serigrafati `SDA` e `SCL` di P8.** Non sono il bus del touch (vanno alla microSD e alla luce frontale).

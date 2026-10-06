@@ -17,7 +17,7 @@
 
 namespace cfg {
 
-constexpr char kTitle[] = "Arrocco hwtest 0.4";
+constexpr char kTitle[] = "Arrocco hwtest 0.5";
 
 // --- pins: GPIO numbers, XIAO silk names in the comments ---
 constexpr uint8_t kEpdRst = 1;    // D0

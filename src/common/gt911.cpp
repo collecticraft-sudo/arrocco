@@ -39,9 +39,12 @@ void resetSequence(bool intHigh) {
   delay(10);
   digitalWrite(cfg::kTouchInt, LOW);
   delay(50);                          // INT must stay LOW a little longer
-  // The GT911 drives INT push-pull from here on. The weak pull-down only makes a
-  // disconnected wire read a steady LOW, so that "0 edges" really means "no wire".
-  pinMode(cfg::kTouchInt, INPUT_PULLDOWN);
+  // On the GDEY075T7-T01 the GT911 runs INT in falling-edge mode (Module_Switch1 0x3D):
+  // it pulls the line LOW to report and needs a pull-up to bring it back. Neither the
+  // FTS02 nor the panel has one, so the ESP32 provides it: with the pull-down used
+  // before, the first device saw a proven INT wire and 0 edges. A disconnected wire
+  // now reads a steady HIGH, so "0 edges" still means "no wire".
+  pinMode(cfg::kTouchInt, INPUT_PULLUP);
   delay(50);
 }
 
