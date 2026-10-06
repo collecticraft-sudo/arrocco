@@ -96,10 +96,12 @@ struct Context {
   }
 
   bool gameInProgress() const { return started && !game.isOver(); }
+  // Something a new game would destroy, so worth a question first: moves of an unfinished game.
+  bool gameAtStake() const { return gameInProgress() && game.plyCount() > 0; }
   void startNewGame(uint32_t now);       // another game like the one being played
   void startSetUpGame(uint32_t now);     // the game `setup` describes
-  // A game restored at boot comes back with its clock stopped (GameClock::bankedMs): the
-  // side to move starts spending time again only when the game is resumed from the menu.
+  // The clock stands still while its game is off the glass: in the menu, and after a power
+  // cut until "Resume game" (GameClock::bankedMs). This starts it again for the side to move.
   void resumeClock(uint32_t now);
   void play(Sound s);          // honours settings.sound
 

@@ -183,19 +183,38 @@ int dialogButtonAt(const Dialog& d, int16_t x, int16_t y) {
   return -1;
 }
 
-// Resign / draw: three stacked full-width buttons under the question.
-Dialog confirmDialog(const char* resignLabel) {
+// Resign / draw: stacked full-width buttons under the question, the box as tall as they
+// need. Against the engine there is nobody to agree a draw with: resign and cancel only.
+Dialog confirmDialog(const char* resignLabel, bool offerDraw) {
   Dialog d;
   d.box = kConfirmBox;
   d.title = str::kEndGameTitle;
-  d.buttonCount = 3;
-  d.labels[0] = resignLabel;
-  d.labels[1] = str::kAgreeDraw;
-  d.labels[2] = str::kCancel;
+  d.labels[d.buttonCount++] = resignLabel;
+  if (offerDraw) d.labels[d.buttonCount++] = str::kAgreeDraw;
+  d.labels[d.buttonCount++] = str::kCancel;
+  d.box.h = static_cast<int16_t>(kConfirmButtonY0 + d.buttonCount * (kMinButtonH + kButtonGap) + 8);
   const int16_t x = static_cast<int16_t>(d.box.x + (d.box.w - kConfirmButtonW) / 2);
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < d.buttonCount; ++i)
     d.buttons[i] = Rect{x, static_cast<int16_t>(d.box.y + kConfirmButtonY0 + i * (kMinButtonH + kButtonGap)),
                         kConfirmButtonW, kMinButtonH};
+  return d;
+}
+
+// Before an unfinished game is thrown away: the question, what it costs, and a row of
+// two buttons, the box centred on `cx` (the board's centre, or the screen's).
+Dialog newGameDialog(int16_t cx) {
+  Dialog d;
+  d.box = Rect{static_cast<int16_t>(cx - kNewGameBoxW / 2), kNewGameBoxY, kNewGameBoxW, kNewGameBoxH};
+  d.title = str::kNewGameTitle;
+  d.subtitle = str::kNewGameLost;
+  d.buttonCount = 2;
+  d.labels[0] = str::kButtonNewGame;
+  d.labels[1] = str::kCancel;
+  constexpr int16_t kW = 156;
+  const int16_t x0 = static_cast<int16_t>(d.box.x + (d.box.w - (2 * kW + kButtonGap)) / 2);
+  const int16_t y = static_cast<int16_t>(d.box.y + d.box.h - kMinButtonH - 24);
+  for (int i = 0; i < 2; ++i)
+    d.buttons[i] = Rect{static_cast<int16_t>(x0 + i * (kW + kButtonGap)), y, kW, kMinButtonH};
   return d;
 }
 

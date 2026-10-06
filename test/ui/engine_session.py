@@ -26,14 +26,18 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sim_session import (Sim, check, center, square_rect, square_center_box, is_board_frame,  # noqa: E402
-                         box_present, MENU_BTN, SIDE_BTN, PROMO_BTN, PROMO_BOX, GAMEOVER_BOX,
+                         box_present, MENU_BTN, SIDE_BTN, PROMO_BTN, PROMO_BOX, GAMEOVER_BOX, GAMEOVER_BTN,
                          HEADLINE, SUBLINE, BTN_NEW, BTN_UNDO, BTN_RESIGN, BTN_MENU)
 
 # Menu and engine-setup slots, mirrored from ui/menu_screen.cpp.
 MENU_SLOT_RESUME, MENU_SLOT_ENGINE = 0, 2
 ENGINE_SLOT_SIDE, ENGINE_SLOT_LEVEL, ENGINE_SLOT_START, ENGINE_SLOT_BACK = 0, 1, 2, 5
 CLOCK_SLOT_OFF = 0
-CONFIRM_BTN = lambda i: (80, 120 + 56 + i * 56, 320, 48)   # resign / draw / cancel
+CONFIRM_BTN = lambda i: (80, 120 + 56 + i * 56, 320, 48)   # resign / cancel against the engine
+CONFIRM_BOX = (64, 120, 352, 232)                           # three buttons: two players
+ENGINE_CONFIRM_BOX = (64, 120, 352, 176)                    # two buttons: against the engine
+NEW_GAME_BOX = (32, 144, 416, 184)                          # "Start a new game?" over the board
+NEW_GAME_BTN = lambda i: (80 + i * 164, 256, 156, 48)       # new game / cancel
 
 SQUARES = [f + r for r in "12345678" for f in "abcdefgh"]
 # Where a human's pieces are at the start, then the rest of the board.
@@ -172,9 +176,23 @@ def main():
           "'Thinking...' is gone once the move is played")
     sim.save(answer[0], "e03_engine_answered")
 
+    # ---- 3b. resigning: only the human's own colour, and no draw to agree -----------------
+    dialog = sim.tap(*center(SIDE_BTN(BTN_RESIGN)))
+    check(len(dialog) == 1 and box_present(dialog[0], ENGINE_CONFIRM_BOX),
+          "resign against the engine: a two-button popup, resign and cancel")
+    check(not box_present(dialog[0], CONFIRM_BOX), "no 'Draw by agreement': the engine never agrees")
+    sim.save(dialog[0], "e03b_resign_dialog")
+    resign_on_my_move = dialog[0].region(CONFIRM_BTN(0))
+    cancelled = sim.tap(*center(CONFIRM_BTN(1)))
+    check(len(cancelled) == 1 and cancelled[0].data == answer[0].data, "Cancel: the board as it was")
+
     # ---- 4. Menu while it thinks: abort, and nothing repaints over the menu ---------------
     src, dst, frames = play_human_move(sim, 3, rng)
     check(frames[-1].region(HEADLINE) == thinking_headline, "it is thinking again after %s%s" % (src, dst))
+    dialog = sim.tap(*center(SIDE_BTN(BTN_RESIGN)))
+    check(len(dialog) == 1 and dialog[0].region(CONFIRM_BTN(0)) == resign_on_my_move,
+          "resign while the engine thinks: still the human's colour, never the engine's")
+    check(len(sim.tap(*center(CONFIRM_BTN(1)))) == 1, "Cancel while it thinks: one frame")
     menu = sim.tap(*center(SIDE_BTN(BTN_MENU)))
     check(len(menu) == 1 and menu[0].kind == "full", "Menu while thinking: one Full frame")
     check(not is_board_frame(menu[0]), "Menu while thinking: the menu is on the panel")
@@ -201,11 +219,15 @@ def main():
     late = quiet_ticks(sim, 25)
     check(not late, "Undo while thinking: the aborted search never plays its move")
 
-    # ---- 7. New game while it thinks -------------------------------------------------------
+    # ---- 7. New game while it thinks: asked first, the answer held meanwhile ------------
     src, dst, frames = play_human_move(sim, 5, rng)
     check(frames[-1].region(HEADLINE) == thinking_headline, "thinking after %s%s" % (src, dst))
-    fresh = sim.tap(*center(SIDE_BTN(BTN_NEW)))
-    check(len(fresh) == 1 and fresh[0].kind == "deep", "New game while thinking: one Deep frame")
+    asked = sim.tap(*center(SIDE_BTN(BTN_NEW)))
+    check(len(asked) == 1 and box_present(asked[0], NEW_GAME_BOX), "New game in a game with moves: it asks first")
+    held = quiet_ticks(sim, 25)
+    check(not held, "while it asks, the engine's answer waits: nothing repaints under the popup")
+    fresh = sim.tap(*center(NEW_GAME_BTN(0)))
+    check(len(fresh) == 1 and fresh[0].kind == "deep", "New game confirmed: one Deep frame")
     check(fresh[0].region(HEADLINE) == to_move_headline,
           "New game while thinking: White to move on a fresh board")
     late = quiet_ticks(sim, 25)
@@ -251,6 +273,15 @@ def main():
     check(box_present(over[1], GAMEOVER_BOX), "the game reached a legal end (%s)" % over[0])
     sim.save(over[1], "e04_game_over")
     print("   game over by %s (%d plies, %d engine moves)" % (over[0], plies, engine_moves))
+
+    # ---- 9. Undo before the first move, while the engine thinks with White ----------------
+    check(len(sim.tap(*center(GAMEOVER_BTN(2)))) == 1, "game over: 'Menu'")
+    board = open_engine_game(sim, side_taps=1)
+    sim.save(board, "e05_engine_has_white")
+    check(board.region(HEADLINE) == thinking_headline, "playing Black: the engine thinks from the first frame")
+    check(len(sim.tap(*center(SIDE_BTN(BTN_UNDO)))) == 0, "Undo with nothing to take back: no frame")
+    answer, quiet = wait_for_engine(sim)
+    check(len(answer) == 1, "and the engine still answers: the search was left alone")
 
     sim.quit()
     print("ALL %d CHECKS PASSED" % check.count)

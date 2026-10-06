@@ -282,6 +282,24 @@ def main():
     ses.step("Resign/Draw", *center(SIDE_BTN(BTN_RESIGN)))
     ses.step("White resigns", *center(CONFIRM_BTN(0)), kind="deep")
 
+    # ---- time trouble: no Full upgrade that would eat the last minute of the side to move ------
+    ses.step("Menu", *center(GAMEOVER_BTN(2)), kind="full")
+    new_game(ses, CLOCK_SLOT_5, "5+0 time trouble")
+    for _ in range(250):                  # White thinks 4 min 10 s: cadence Partials pile up
+        ses.note_tick_frames(sim.tick(1000))
+    check(ses.partials >= 16, "time trouble: %d Partials since the last Full" % ses.partials)
+    fr = ses.move("e2", "e4", "time trouble 1. e4")
+    check(fr.kind == "full", "Black has its five minutes: White's move gets the Full upgrade as usual")
+    for _ in range(160):                  # Black thinks 2 min 40 s: 16 more cadence Partials
+        ses.note_tick_frames(sim.tick(1000))
+    ses.tap_square("e7", "time trouble: select e7")
+    before = ses.partials
+    fr = ses.tap_square("e5", "time trouble: 1... e5, White left with ~46 s", kind="partial")[0]
+    check(fr.kind == "partial" and before >= 16,
+          "White under a minute: Black's move stays Partial (%d Partials before it)" % before)
+    ses.step("Resign/Draw", *center(SIDE_BTN(BTN_RESIGN)))
+    ses.step("White resigns", *center(CONFIRM_BTN(0)), kind="deep")
+
     # ---- menu: battery jitter must not cause a refresh storm ----------------------------------
     sim.send("set battery 50")
     sim.sync()

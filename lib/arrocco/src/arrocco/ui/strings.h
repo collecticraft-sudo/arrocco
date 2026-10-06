@@ -76,6 +76,7 @@ constexpr char kButtonNewGame[] = "New game";
 constexpr char kButtonUndo[] = "Undo";
 constexpr char kButtonFlip[] = "Flip";
 constexpr char kButtonResignDraw[] = "Resign/Draw";
+constexpr char kButtonResign[] = "Resign";           // against the engine: no draw to agree
 constexpr char kButtonMenu[] = "Menu";
 constexpr char kButtonPrev[] = "<";
 constexpr char kButtonNext[] = ">";
@@ -92,6 +93,10 @@ constexpr char kWhiteResigns[] = "White resigns";
 constexpr char kBlackResigns[] = "Black resigns";
 constexpr char kAgreeDraw[] = "Draw by agreement";
 constexpr char kCancel[] = "Cancel";
+
+// New game popup: before an unfinished game is replaced (game screen, clock picker)
+constexpr char kNewGameTitle[] = "Start a new game?";
+constexpr char kNewGameLost[] = "The game in progress will be lost";
 
 // Game over
 constexpr char kWhiteWins[] = "White wins";

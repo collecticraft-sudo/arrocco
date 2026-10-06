@@ -9,12 +9,13 @@ out. Checks that:
 
   - the menu offers "Resume game", with a subline that tells the games apart;
   - resuming paints the very frame that was on the glass before the cut: the position,
-    the move list, the orientation and the clocks, which stood still in the meantime;
+    the move list, the orientation and the clocks, which stood still in the meantime
+    (as they do in the menu, power cut or not);
   - Undo and threefold repetition still see the moves from before the cut, and the
     engine is asked again when it was its turn;
-  - looking through the setup screens does not touch the saved game, a new game replaces
-    it, a finished one is not offered, and junk or another format version in the flash
-    is ignored;
+  - looking through the setup screens does not touch the saved game; a new game replaces
+    it only after "Start a new game?"; a finished one is not offered; junk or another
+    format version in the flash is ignored;
   - the flash gets one write per move and at the start and end of a game, none for a
     selection, a clock repaint or the setup screens, and always after the refresh.
 
@@ -42,6 +43,11 @@ BOARD = (16, 16, 448, 448)
 MOVE_LIST = (496, 168, 288, 104)            # five rows of two columns, baselines 184..264
 RESUME_NOTE = (208, 124, 384, 18)           # the subline inside the "Resume game" button
 REASON_LINE = (60, 190, 360, 26)            # game-over overlay: "Threefold repetition"
+# "Start a new game?" (layout.h kNewGameBox*): centred on the board, or on the screen.
+NEW_GAME_BOX_BOARD = (32, 144, 416, 184)
+NEW_GAME_BOX_SCREEN = (192, 144, 416, 184)
+NEW_GAME_BTN_BOARD = lambda i: (80 + i * 164, 256, 156, 48)     # new game / cancel
+NEW_GAME_BTN_SCREEN = lambda i: (240 + i * 164, 256, 156, 48)
 
 
 class Board:
@@ -146,8 +152,16 @@ def run(state_dir, png_dir):
         ticks += b.sim.tick(1000)
     check(len(ticks) >= 2, "the running clock repaints (%d frames in 25 s)" % len(ticks))
     check(len(b.stores()) == stores, "clock repaints write nothing")
+    # The menu is a pause: the clock stops there, and "Resume game" starts it again.
+    b.tap(SIDE_BTN(BTN_MENU), "'Menu'", kind="full")
+    check(len(b.stores()) == stores + 1, "going to the menu writes the clock as it stopped")
+    check(len(b.sim.tick(120000)) == 0, "two minutes in the menu: no repaint, no flag falls")
+    paused = b.tap(MENU_BTN(MENU_SLOT_RESUME), "'Resume game' in the same session", kind="full")
+    check(paused.region(CLOCK_ROW) == ticks[-1].region(CLOCK_ROW),
+          "the two minutes in the menu were not charged to White")
+    check(len(b.stores()) == stores + 1, "resuming writes nothing")
     b.tap(SIDE_BTN(BTN_FLIP), "'Flip'", kind="full")
-    check(len(b.stores()) == stores + 1, "a flip is written: the orientation is part of the game")
+    check(len(b.stores()) == stores + 2, "a flip is written: the orientation is part of the game")
     before_cut = b.move("g1", "f3", flipped=True)
     b.sim.save(before_cut, "r01_before_the_cut")
     check(is_board_frame(before_cut) and before_cut.ink(CLOCK_ROW) > 200, "on the glass: the board, with clocks")
@@ -218,7 +232,13 @@ def run(state_dir, png_dir):
     menu = b.tap(SIDE_BTN(BTN_MENU), "'Menu'", kind="full")
     check(b.offers_resume(menu), "the menu offers the game")
     stores = len(b.stores())
-    b.tap(MENU_BTN(MENU_SLOT_TWO_PLAYERS), "'Two players'", kind="full")
+    picker = b.tap(MENU_BTN(MENU_SLOT_TWO_PLAYERS), "'Two players'", kind="full")
+    # A clock picked with a game waiting behind "Resume game": the picker asks first.
+    asked = b.tap(MENU_BTN(CLOCK_SLOT_OFF), "'No clock' with a game in progress", kind="partial")
+    b.sim.save(asked, "r06_picker_asks")
+    check(box_present(asked, NEW_GAME_BOX_SCREEN), "'Start a new game?' over the clock picker")
+    kept = b.tap(NEW_GAME_BTN_SCREEN(1), "'Cancel'", kind="partial")
+    check(kept.data == picker.data, "Cancel: back to the clocks, nothing started")
     b.tap(MENU_BTN(CLOCK_SLOT_BACK), "clock picker 'Back'", kind="full")
     b.tap(MENU_BTN(MENU_SLOT_ENGINE), "'Play vs engine'", kind="full")
     b.tap(MENU_BTN(ENGINE_SLOT_LEVEL), "a stronger level")
@@ -232,8 +252,15 @@ def run(state_dir, png_dir):
     back = b.tap(MENU_BTN(MENU_SLOT_RESUME), "'Resume game'", kind="full")
     check(back.data == answered.data, "the board after the engine's move, White to move")
 
-    # ---- 7. a new game replaces the stored one ---------------------------------------------------
-    b.tap(SIDE_BTN(BTN_NEW), "'New game'", kind="deep")
+    # ---- 7. a new game replaces the stored one, after a question ---------------------------------
+    asked = b.tap(SIDE_BTN(BTN_NEW), "'New game' in a game with moves", kind="partial")
+    b.sim.save(asked, "r07_new_game_asks")
+    check(box_present(asked, NEW_GAME_BOX_BOARD), "'Start a new game?' over the board")
+    kept = b.tap(NEW_GAME_BTN_BOARD(1), "'Cancel'", kind="partial")
+    check(kept.data == back.data, "Cancel: the game as it was")
+    check(not b.stores(), "asking and cancelling write nothing")
+    b.tap(SIDE_BTN(BTN_NEW), "'New game' again", kind="partial")
+    b.tap(NEW_GAME_BTN_BOARD(0), "'New game' in the question", kind="deep")
     check(len(b.stores()) == 1, "the new game is written")
     b.cut()
     b = Board(state_dir, png_dir, "after New game")

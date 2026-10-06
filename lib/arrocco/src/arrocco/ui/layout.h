@@ -106,11 +106,17 @@ constexpr Rect promotionButtonRect(int choice) {
 }
 
 constexpr int kDialogMaxButtons = 3;
-// Confirm popup: title, then three stacked kMinButtonH buttons, kButtonGap apart.
+// Confirm popup: title, then three stacked kMinButtonH buttons, kButtonGap apart (two
+// against the engine: no draw to agree, and the box ends 56 px higher).
 constexpr int16_t kConfirmButtonW = 320;
 constexpr int16_t kConfirmButtonY0 = 56;   // first button top, below the box top
 constexpr Rect kConfirmBox{64, 120, 352, kConfirmButtonY0 + 3 * (kMinButtonH + kButtonGap) + 8};  // 232 tall
 constexpr Rect kGameOverBox{40, 136, 400, 208};
+// "Start a new game?" before an unfinished game is lost: over the board (centred on it)
+// or over the clock picker (centred on the screen). Title, subtitle, a row of two buttons.
+constexpr int16_t kNewGameBoxW = 416;
+constexpr int16_t kNewGameBoxH = 184;
+constexpr int16_t kNewGameBoxY = 144;
 
 // ---- behaviour ---------------------------------------------------------------------------
 constexpr int16_t kTapSlop = 16;                  // Up this close to Down still counts as a tap
@@ -120,5 +126,8 @@ constexpr int kBatteryRepaintStep = 5;            // menu footer: repaint only f
 constexpr uint32_t kBatteryRepaintMinMs = 30000;  // ... and not more often than this (USB: at once)
 constexpr uint8_t kPartialsBeforeFull = 16;       // "normal" refresh policy
 constexpr uint8_t kPartialsBeforeFullFewer = 32;  // "fewer flashes"
+// No Full upgrade while the side to move has less than this on a running clock: the
+// 1.2-1.8 s of a Full refresh would come off its time. Ghosting waits for calmer times.
+constexpr uint32_t kNoFullBelowClockMs = 60000;
 
 }  // namespace arrocco::ui

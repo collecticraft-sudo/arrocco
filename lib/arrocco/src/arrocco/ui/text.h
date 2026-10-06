@@ -50,8 +50,9 @@ struct Dialog {
 void drawDialog(Adafruit_GFX& gfx, const Dialog& d);
 int dialogButtonAt(const Dialog& d, int16_t x, int16_t y);  // -1 = none
 
-// The three canonical dialog layouts.
-Dialog confirmDialog(const char* resignLabel);                                  // resign / draw / cancel
+// The canonical dialog layouts.
+Dialog confirmDialog(const char* resignLabel, bool offerDraw);                  // resign / (draw) / cancel
 Dialog gameOverDialog(const char* result, const char* reason);                  // new game / review / menu
+Dialog newGameDialog(int16_t cx);                                               // new game / cancel
 
 }  // namespace arrocco::ui

@@ -5,8 +5,8 @@
 // Refresh policy ("few flashes", docs/decisioni.md): ONE present() per user-visible
 // event, never two for one tap. Partial normally; Full when the screen changes, or at
 // a natural pause (a move was just played) once partialsSinceFull reached the
-// threshold; Deep at game start and game end. panelOff() after kPanelOffAfterMs
-// without touches, from tick().
+// threshold, unless the side to move is down to its last minute; Deep at game start and
+// game end. panelOff() after kPanelOffAfterMs without touches, from tick().
 //
 // Power cuts (saved_game.h): after every present() the game is encoded again and, when
 // the bytes differ from what the store already holds, written with Platform::storeBlob().
@@ -55,6 +55,7 @@ class ChessApp final : public arrocco::App {
   Screen& current();
   void apply(const Action& action);
   Refresh resolve(const Action& action) const;
+  bool inTimeTrouble() const;    // the side to move has under kNoFullBelowClockMs left
   void present(Refresh kind);
   uint8_t fullThreshold() const;
   void restoreGame();    // begin(): the game a power cut interrupted, if the store has one

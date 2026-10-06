@@ -85,8 +85,15 @@ void GameScreen::deselect() {
   targets_.clear();
 }
 
-const char* GameScreen::resignLabel() const {
-  return ctx_.game.position().sideToMove() == Color::White ? str::kWhiteResigns : str::kBlackResigns;
+// Against the engine only the human can resign, whoever is to move: offering the side to
+// move would let the human resign for the engine while it thinks.
+Color GameScreen::resigningSide() const {
+  return ctx_.vsEngine ? chess::opposite(ctx_.engineColor) : ctx_.game.position().sideToMove();
+}
+
+Dialog GameScreen::confirmDialogNow() const {
+  return confirmDialog(resigningSide() == Color::White ? str::kWhiteResigns : str::kBlackResigns,
+                       !ctx_.vsEngine);
 }
 
 // ---- drawing ------------------------------------------------------------------------------
@@ -143,12 +150,13 @@ void GameScreen::draw(Adafruit_GFX& gfx) {
   view.buttons[kNewGame] = str::kButtonNewGame;
   view.buttons[kUndo] = str::kButtonUndo;
   view.buttons[kFlip] = str::kButtonFlip;
-  view.buttons[kResignDraw] = str::kButtonResignDraw;
+  view.buttons[kResignDraw] = ctx_.vsEngine ? str::kButtonResign : str::kButtonResignDraw;
   view.buttons[kMenu] = str::kButtonMenu;
   drawSidePanel(gfx, game, view);
 
   if (mode_ == Mode::Promotion) drawPromotionPopup(gfx, pos.sideToMove());
-  if (mode_ == Mode::Confirm) drawDialog(gfx, confirmDialog(resignLabel()));
+  if (mode_ == Mode::Confirm) drawDialog(gfx, confirmDialogNow());
+  if (mode_ == Mode::ConfirmNewGame) drawDialog(gfx, newGameDialog(kBoardRect.cx()));
 }
 
 // ---- input ----------------------------------------------------------------------------------
@@ -156,6 +164,7 @@ void GameScreen::draw(Adafruit_GFX& gfx) {
 Action GameScreen::onTap(int16_t x, int16_t y) {
   if (mode_ == Mode::Promotion) return onPromotionTap(x, y);
   if (mode_ == Mode::Confirm) return onConfirmTap(x, y);
+  if (mode_ == Mode::ConfirmNewGame) return onNewGameTap(x, y);
   const Square s = squareAt(x, y, ctx_.flipped);
   if (s != chess::kNoSquare) return onSquare(s);
   const int slot = sideButtonAt(x, y);
@@ -242,17 +251,17 @@ Action GameScreen::onPromotionTap(int16_t x, int16_t y) {
 }
 
 Action GameScreen::onConfirmTap(int16_t x, int16_t y) {
-  const Dialog d = confirmDialog(resignLabel());
+  const Dialog d = confirmDialogNow();
   const int button = dialogButtonAt(d, x, y);
   mode_ = Mode::Play;
   chess::Game& game = ctx_.game;
   if (button == 0) {
-    const bool whiteResigns = game.position().sideToMove() == Color::White;
+    const bool whiteResigns = resigningSide() == Color::White;
     game.declareResult(whiteResigns ? chess::GameResult::BlackWins : chess::GameResult::WhiteWins,
                        chess::GameEndReason::Resignation);
     return endGame();
   }
-  if (button == 1) {
+  if (button == 1 && !ctx_.vsEngine) {        // against the engine, 1 is Cancel
     game.declareResult(chess::GameResult::Draw, chess::GameEndReason::Agreement);
     return endGame();
   }
@@ -261,19 +270,39 @@ Action GameScreen::onConfirmTap(int16_t x, int16_t y) {
   return Action::repaint();
 }
 
+Action GameScreen::onNewGameTap(int16_t x, int16_t y) {
+  if (dialogButtonAt(newGameDialog(kBoardRect.cx()), x, y) == 0) return newGame(ctx_.platform.millis());
+  // Cancel, or anywhere else: the game goes on, and a move the engine found meanwhile
+  // is played on the next tick.
+  mode_ = Mode::Play;
+  return Action::repaint();
+}
+
+Action GameScreen::newGame(uint32_t now) {
+  stopEngine();
+  ctx_.startNewGame(now);
+  mode_ = Mode::Play;
+  deselect();
+  startEngine();                     // the engine may have White
+  return Action::repaint(Refresh::Deep);
+}
+
 Action GameScreen::onButton(int slot) {
   const uint32_t now = ctx_.platform.millis();
   switch (slot) {
     case kNewGame:
-      stopEngine();
-      ctx_.startNewGame(now);
-      mode_ = Mode::Play;
+      // One tap must not throw away a game in progress: "New game" sits next to "Undo",
+      // and the game in flash would be gone with it. Nothing to lose, no question.
+      if (!ctx_.gameAtStake()) return newGame(now);
       deselect();
-      startEngine();                 // the engine may have White
-      return Action::repaint(Refresh::Deep);
+      mode_ = Mode::ConfirmNewGame;
+      return Action::repaint();
     case kUndo: {
+      // Nothing to take back: leave everything as it is, a search included. Stopping the
+      // engine first would leave "Thinking..." on the glass with nobody thinking.
+      if (ctx_.game.plyCount() == 0) return Action::none();
       stopEngine();
-      if (!ctx_.game.takeBack()) return Action::none();
+      ctx_.game.takeBack();
       // Against the engine, one Undo undoes one MOVE of the player's: keep going back
       // until it is the player's turn again (or the line runs out).
       if (ctx_.vsEngine) {
@@ -297,6 +326,9 @@ Action GameScreen::onButton(int slot) {
     case kMenu:
       stopEngine();                  // nothing may repaint over the menu
       deselect();
+      // Off the glass, the game is paused: its clock would otherwise run out in the menu,
+      // and "Resume game" could end the game on time the moment it came back.
+      ctx_.clock.stop(now);
       return Action::go(ScreenId::Menu);
     default:
       return Action::none();

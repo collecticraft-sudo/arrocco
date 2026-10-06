@@ -79,7 +79,7 @@ Action MenuScreen::onTap(int16_t x, int16_t y) {
   switch (menuButtonAt(x, y)) {
     case kSlotResume:
       if (!ctx_.gameInProgress()) return Action::none();
-      ctx_.resumeClock(ctx_.platform.millis());   // a game back from a power cut: its clock starts now
+      ctx_.resumeClock(ctx_.platform.millis());   // it stood still while the game was off the glass
       return Action::go(ScreenId::Game);
     case kSlotTwoPlayers:
       ctx_.setup.vsEngine = false;
@@ -113,12 +113,25 @@ void ClockPickerScreen::draw(Adafruit_GFX& gfx) {
   for (int slot = kSlotOff; slot <= kSlot30; ++slot)
     drawButton(gfx, menuButtonRect(slot), Font::Bold12, kClockLabels[slot]);
   drawButton(gfx, menuButtonRect(kSlotClockBack), Font::Bold12, str::kBack);
+  if (pendingSlot_ >= 0) drawDialog(gfx, newGameDialog(kCenterX));
 }
 
 Action ClockPickerScreen::onTap(int16_t x, int16_t y) {
+  if (pendingSlot_ >= 0) {
+    const int slot = pendingSlot_;
+    pendingSlot_ = -1;
+    if (dialogButtonAt(newGameDialog(kCenterX), x, y) == 0) return start(slot);
+    return Action::repaint();      // Cancel, or anywhere else: back to the clocks, nothing lost
+  }
   const int slot = menuButtonAt(x, y);
   if (slot < 0) return Action::none();
   if (slot == kSlotClockBack) return Action::go(ScreenId::Menu);
+  if (!ctx_.gameAtStake()) return start(slot);
+  pendingSlot_ = slot;
+  return Action::repaint();
+}
+
+Action ClockPickerScreen::start(int slot) {
   ctx_.settings.clockPreset = kClockBySlot[slot];
   ctx_.startSetUpGame(ctx_.platform.millis());
   // Deep is reserved for game start and game end: the one moment a 3 s flash is welcome.

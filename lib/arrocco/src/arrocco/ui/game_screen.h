@@ -6,14 +6,20 @@
 // The engine never blocks the screen. When it is its turn, startEngine() hands the
 // position to arrocco::Engine and the side panel says "Thinking..."; onTick() polls
 // take() and plays the move with the one present() the refresh policy allows. Undo,
-// New game and Menu abort the search; the resign/draw popup only holds the answer back
-// until it is closed, because a move that repainted the board under an open dialog
-// would take the dialog away with it.
+// New game and Menu abort the search; the resign/draw and new-game popups only hold the
+// answer back until they are closed, because a move that repainted the board under an
+// open dialog would take the dialog away with it.
+//
+// Against the engine the human resigns for their own colour, whoever is to move, and
+// there is no draw by agreement: the engine never agreed to anything. "New game" in an
+// unfinished game with moves in it asks first, and so does "Menu", in its own way: the
+// clock stops while the game is off the glass, and "Resume game" starts it again.
 #pragma once
 #include <cstdint>
 
 #include "arrocco/chess/types.h"
 #include "arrocco/ui/screen.h"
+#include "arrocco/ui/text.h"
 
 namespace arrocco::ui {
 
@@ -26,7 +32,7 @@ class GameScreen final : public Screen {
   Action onTick(uint32_t now) override;
 
  private:
-  enum class Mode : uint8_t { Play, Promotion, Confirm };
+  enum class Mode : uint8_t { Play, Promotion, Confirm, ConfirmNewGame };
   enum Button : int { kNewGame = 0, kUndo, kFlip, kResignDraw, kMenu };
 
   Action onSquare(chess::Square s);
@@ -36,12 +42,15 @@ class GameScreen final : public Screen {
   Action onButton(int slot);
   Action onPromotionTap(int16_t x, int16_t y);
   Action onConfirmTap(int16_t x, int16_t y);
+  Action onNewGameTap(int16_t x, int16_t y);
+  Action newGame(uint32_t now);
   void select(chess::Square s);
   void deselect();
   Action playMove(chess::Move m);
   Action endGame();
   Action flagFall(chess::Color side);   // `side` ran out of time
-  const char* resignLabel() const;
+  chess::Color resigningSide() const;   // the human against the engine, else the side to move
+  Dialog confirmDialogNow() const;
 
   Context& ctx_;
   Mode mode_ = Mode::Play;

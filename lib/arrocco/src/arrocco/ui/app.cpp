@@ -83,8 +83,6 @@ void Context::startSetUpGame(uint32_t now) {
 }
 
 void Context::resumeClock(uint32_t now) {
-  // Only a clock restored at boot stands still in a game in progress: everywhere else it
-  // runs from the start of the game to its end, menu included, and must keep its time.
   if (!clock.enabled() || clock.running() || !gameInProgress()) return;
   clock.start(game.sideOfPly(game.plyCount()), now);
 }
@@ -176,12 +174,19 @@ uint8_t ChessApp::fullThreshold() const {
   return ctx_.settings.fewerFlashes ? kPartialsBeforeFullFewer : kPartialsBeforeFull;
 }
 
-// A Partial at a natural pause becomes a Full once ghosting has built up.
+// A Partial at a natural pause becomes a Full once ghosting has built up, unless the side
+// to move is short of time: the Full would come off its clock (kNoFullBelowClockMs).
 Refresh ChessApp::resolve(const Action& action) const {
   if (action.kind == Action::Kind::Repaint && action.refresh == Refresh::Partial && action.pause &&
-      partialsSinceFull_ >= fullThreshold())
+      partialsSinceFull_ >= fullThreshold() && !inTimeTrouble())
     return Refresh::Full;
   return action.refresh;
+}
+
+bool ChessApp::inTimeTrouble() const {
+  const GameClock& clock = ctx_.clock;
+  return clock.enabled() && clock.running() &&
+         clock.remainingMs(clock.runningSide(), platform_.millis()) < kNoFullBelowClockMs;
 }
 
 void ChessApp::apply(const Action& action) {
