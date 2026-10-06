@@ -2,6 +2,8 @@
 // Arrocco UI — ChessApp: screen switching, tap detection, refresh policy. See app.h.
 #include "arrocco/ui/app.h"
 
+#include <cstring>
+
 #include <Adafruit_GFX.h>
 
 #include "arrocco/ui/layout.h"
@@ -9,6 +11,8 @@
 namespace arrocco::ui {
 
 namespace {
+
+using chess::Color;
 
 // Beeps: select high and short, move lower, game over twice.
 constexpr uint16_t kSelectHz = 1200;
@@ -22,6 +26,20 @@ constexpr uint16_t kGameOverMs = 80;
 constexpr Refresh kBootRefresh = Refresh::Deep;
 
 int16_t absDiff(int16_t a, int16_t b) { return static_cast<int16_t>(a > b ? a - b : b - a); }
+
+// What of the context goes into the saved game: the game being played, never the setup.
+SavedGame savedFrom(const Context& ctx) {
+  SavedGame saved;
+  saved.vsEngine = ctx.vsEngine;
+  saved.engineLevel = static_cast<uint8_t>(clampEngineLevel(ctx.engineLevel));
+  saved.humanSide = ctx.humanSide;
+  saved.engineColor = ctx.engineColor;
+  saved.flipped = ctx.flipped;
+  saved.clockPreset = ctx.clock.preset();
+  saved.clockMs[0] = ctx.clock.bankedMs(Color::White);
+  saved.clockMs[1] = ctx.clock.bankedMs(Color::Black);
+  return saved;
+}
 
 }  // namespace
 
@@ -55,6 +73,20 @@ void Context::startNewGame(uint32_t now) {
   // Playing Black means looking at the board from Black's side, unless the owner
   // asked for the opposite in the settings.
   flipped = (engineColor == chess::Color::White) != settings.flipByDefault;
+}
+
+void Context::startSetUpGame(uint32_t now) {
+  vsEngine = setup.vsEngine;
+  engineLevel = setup.engineLevel;
+  humanSide = setup.humanSide;
+  startNewGame(now);
+}
+
+void Context::resumeClock(uint32_t now) {
+  // Only a clock restored at boot stands still in a game in progress: everywhere else it
+  // runs from the start of the game to its end, menu included, and must keep its time.
+  if (!clock.enabled() || clock.running() || !gameInProgress()) return;
+  clock.start(game.sideOfPly(game.plyCount()), now);
 }
 
 void Context::play(Sound s) {
@@ -93,9 +125,51 @@ Screen& ChessApp::current() {
 }
 
 void ChessApp::begin() {
+  restoreGame();
   screenId_ = ScreenId::Menu;
   current().enter();
   present(kBootRefresh);
+}
+
+// The game is only offered while it can still be played: a finished one, a blob that is
+// not a saved game (saved_game.h), or an engine game on a boot whose engine did not start
+// leaves the board as after a first start. The blob stays in the store until the next
+// game started replaces it, so the engine game comes back on a boot that has the engine.
+void ChessApp::restoreGame() {
+  storedSize_ = platform_.loadBlob(kSavedGameKey, stored_, sizeof stored_);
+  if (storedSize_ == 0) return;
+  SavedGame saved;
+  if (decodeSavedGame(stored_, storedSize_, game_, saved) != SaveCheck::Ok || game_.isOver() ||
+      (saved.vsEngine && !ctx_.engineAvailable())) {
+    game_.newGame();
+    return;
+  }
+  ctx_.started = true;
+  ctx_.vsEngine = saved.vsEngine;
+  ctx_.engineLevel = saved.engineLevel;
+  ctx_.humanSide = saved.humanSide;
+  ctx_.engineColor = saved.engineColor;
+  ctx_.flipped = saved.flipped;
+  // The setup screens open on the choices of the game that came back, and "New game"
+  // starts another one like it.
+  ctx_.setup.vsEngine = saved.vsEngine;
+  ctx_.setup.engineLevel = saved.engineLevel;
+  ctx_.setup.humanSide = saved.humanSide;
+  ctx_.settings.clockPreset = saved.clockPreset;
+  // Stopped: Context::resumeClock() starts it when the game is resumed from the menu.
+  ctx_.clock.restore(saved.clockPreset, saved.clockMs[0], saved.clockMs[1]);
+}
+
+// Nothing is written before a game exists on this power cycle, so a store this firmware
+// cannot read (or a finished game) stays as it is until the next game replaces it.
+void ChessApp::saveGame() {
+  if (!ctx_.started) return;
+  const size_t size = encodeSavedGame(game_, savedFrom(ctx_), scratch_, sizeof scratch_);
+  if (size == 0 || (size == storedSize_ && memcmp(scratch_, stored_, size) == 0)) return;
+  // A write that fails is tried again after the next refresh: the bytes still differ.
+  if (!platform_.storeBlob(kSavedGameKey, scratch_, size)) return;
+  memcpy(stored_, scratch_, size);
+  storedSize_ = size;
 }
 
 uint8_t ChessApp::fullThreshold() const {
@@ -125,7 +199,8 @@ void ChessApp::apply(const Action& action) {
   }
 }
 
-// Every visible change goes through here: redraw the whole buffer, push it once.
+// Every visible change goes through here: redraw the whole buffer, push it once, and then
+// (the glass already shows it) keep whatever changed about the game.
 void ChessApp::present(Refresh kind) {
   if (kind == Refresh::Partial) {
     if (partialsSinceFull_ < 255) ++partialsSinceFull_;
@@ -142,6 +217,7 @@ void ChessApp::present(Refresh kind) {
   // present() blocks: read the clock again rather than reuse an earlier value.
   lastActivityMs_ = platform_.millis();
   panelOffSent_ = false;
+  saveGame();
 }
 
 void ChessApp::onTouch(const TouchEvent& e) {

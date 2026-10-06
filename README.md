@@ -64,8 +64,11 @@ The tests need only a C++17 compiler. The simulator also needs Python 3 (no pack
 
 ```sh
 make -C test/chess test     # rules library tests (perft)
+make -C test/savegame test  # the saved game: round trips, and every corrupt blob refused
 sim/run.sh                  # build, start the local server, open the page
 ```
+
+A game in progress survives a power cut: the board keeps it in flash and offers "Resume game" at the next start. The simulator keeps its flash in `sim/build/state`, so "Restart app" on the page is the same as pulling the cable. Delete that folder, or start with `sim/run.sh --no-state`, for a board fresh from the factory.
 
 ## Roadmap
 

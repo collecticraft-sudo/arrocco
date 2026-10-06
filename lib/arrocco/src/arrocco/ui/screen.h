@@ -23,7 +23,15 @@ struct Settings {
   bool flipByDefault = false;
   bool sound = true;
   bool fewerFlashes = false;               // refresh policy: normal / fewer flashes
-  ClockPreset clockPreset = ClockPreset::Off;
+  ClockPreset clockPreset = ClockPreset::Off;   // the clock picker's last choice
+};
+
+// The game the setup screens put together: the menu picks the kind, the engine setup
+// screen the colour and the level, and the clock picker adds the clock and starts it.
+struct GameSetup {
+  bool vsEngine = false;
+  int engineLevel = 0;                     // index into kEngineLevels
+  HumanSide humanSide = HumanSide::White;
 };
 
 // What a screen wants after handling an event. At most ONE present() follows.
@@ -66,13 +74,19 @@ struct Context {
   Settings settings;
   GameClock clock;
   bool flipped = false;        // orientation of the game being played
-  bool started = false;        // a game was set up on this power cycle
+  bool started = false;        // a game was set up on this power cycle, or resumed from flash
 
-  // ---- play vs engine. `vsEngine` describes the game being SET UP and then the one
-  // being played; `engineColor` is only meaningful once startNewGame() has resolved it.
+  // ---- the game being SET UP. The menu, the engine setup screen and the clock picker
+  // change only this, and the clock picker copies it into the fields below when it starts
+  // the game: looking through the setup screens and backing out leaves the game in
+  // progress, and the copy of it saved in flash, exactly as they were.
+  GameSetup setup;
+
+  // ---- the game being PLAYED, fixed when it starts (or when it is resumed after a power
+  // cut). `engineColor` is only meaningful once startNewGame() has resolved it.
   bool vsEngine = false;
   int engineLevel = 0;                                  // index into kEngineLevels
-  HumanSide humanSide = HumanSide::White;
+  HumanSide humanSide = HumanSide::White;               // as chosen: Random stays Random
   chess::Color engineColor = chess::Color::Black;
   bool engineAvailable() const { return engine != nullptr; }
   // The engine is the side to move of a live engine game: its turn to think.
@@ -82,7 +96,11 @@ struct Context {
   }
 
   bool gameInProgress() const { return started && !game.isOver(); }
-  void startNewGame(uint32_t now);
+  void startNewGame(uint32_t now);       // another game like the one being played
+  void startSetUpGame(uint32_t now);     // the game `setup` describes
+  // A game restored at boot comes back with its clock stopped (GameClock::bankedMs): the
+  // side to move starts spending time again only when the game is resumed from the menu.
+  void resumeClock(uint32_t now);
   void play(Sound s);          // honours settings.sound
 
  private:

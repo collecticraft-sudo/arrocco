@@ -38,6 +38,7 @@ class GameClock {
   bool enabled() const { return enabled_; }
   bool running() const { return running_; }
   chess::Color runningSide() const { return side_; }
+  ClockPreset preset() const { return preset_; }
 
   void start(chess::Color side, uint32_t now);   // `side` starts spending time
   void stop(uint32_t now);                        // charge what ran, then nobody runs
@@ -48,6 +49,15 @@ class GameClock {
 
   uint32_t remainingMs(chess::Color side, uint32_t now) const;
   bool timedOut(chess::Color side, uint32_t now) const { return enabled_ && remainingMs(side, now) == 0; }
+
+  // What a saved game keeps of the clock (saved_game.h): the time `side` had left when the
+  // clock was last charged, that is at the last move (or take-back, or the start). The
+  // time spent since is not in it: a board that lost its power cannot tell how long it
+  // stayed off, so a resumed game gives the side to move its turn back from the start.
+  uint32_t bankedMs(chess::Color side) const { return remaining_[chess::indexOf(side)]; }
+  // Puts a saved clock back: `preset`'s increment, these times left, nobody running.
+  // start() it when the game is resumed.
+  void restore(ClockPreset preset, uint32_t whiteMs, uint32_t blackMs);
 
   // The whole seconds the panel should show for `remainingMs`, rounded UP to the
   // cadence step: 05:00 stays on the glass until 04:50 is really due.
@@ -61,6 +71,7 @@ class GameClock {
   uint32_t incrementMs_ = 0;
   uint32_t startedMs_ = 0;
   chess::Color side_ = chess::Color::White;
+  ClockPreset preset_ = ClockPreset::Off;
   bool running_ = false;
   bool enabled_ = false;
 };

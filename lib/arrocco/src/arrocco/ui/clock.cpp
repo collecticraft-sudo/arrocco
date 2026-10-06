@@ -18,6 +18,14 @@ void GameClock::reset(ClockPreset preset) {
   running_ = false;
   side_ = Color::White;
   startedMs_ = 0;
+  preset_ = enabled_ ? preset : ClockPreset::Off;
+}
+
+void GameClock::restore(ClockPreset preset, uint32_t whiteMs, uint32_t blackMs) {
+  reset(preset);
+  if (!enabled_) return;               // no clock: both stay at 0, as reset() leaves them
+  remaining_[indexOf(Color::White)] = whiteMs;
+  remaining_[indexOf(Color::Black)] = blackMs;
 }
 
 void GameClock::start(Color side, uint32_t now) {

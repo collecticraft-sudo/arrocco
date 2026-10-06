@@ -19,6 +19,8 @@
 //             48,000-byte 1-bit buffer, row-major, MSB first, bit 1 = white}
 //     beep   {hz, ms, t}          panel {on, t}        touch_ignored {count}
 //     state  {battery, usb, scale}                     error {msg}      bye {}
+//     store  {key, bytes, ok, t}  the app wrote a blob to the board's flash (only with
+//                                 --state DIR: without it there is no flash to write)
 #pragma once
 
 #include <stddef.h>
@@ -59,6 +61,7 @@ public:
   void panel(bool on, uint32_t timeMs);
   void touchIgnored(uint32_t totalCount);
   void state(int batteryPercent, bool usbPowered, double latencyScale);
+  void store(const char* key, size_t bytes, bool ok, uint32_t timeMs);
   void error(const char* message, const char* detail);
   void bye();
 };

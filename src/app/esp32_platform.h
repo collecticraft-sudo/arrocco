@@ -22,6 +22,9 @@ class Esp32Platform final : public arrocco::Platform {
   void beep(uint16_t hz, uint16_t ms) override; // queued, never blocks
   int batteryPercent() override;                // last MAX17048 SOC, -1 without a gauge
   bool usbPowered() override;                   // always false: no VBUS sense, see .cpp
+  // NVS through Preferences, namespace "arrocco-game"; each call logs a SAVE line.
+  size_t loadBlob(const char* key, uint8_t* out, size_t capacity) override;
+  bool storeBlob(const char* key, const uint8_t* data, size_t size) override;
 
   // For the main loop.
   // Steps the beep queue and polls the gauge every 10 s. Reads the clock itself: the

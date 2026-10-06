@@ -4,6 +4,11 @@
 // one the panel will get. present() hands the 48,000-byte buffer to the protocol and
 // then blocks for as long as the real panel would, because a core that is never made
 // to wait would hide exactly the problems the simulator exists to show.
+//
+// The board's flash (Platform::loadBlob / storeBlob) is a directory with one file per
+// key, and only when one was given (arrocco-sim --state DIR; sim/run.sh passes
+// sim/build/state). Without it every start is a factory-fresh board, which is what the
+// scripted sessions in test/ui want; resume_session.py passes a directory of its own.
 #pragma once
 
 #include <stdint.h>
@@ -43,6 +48,12 @@ public:
   void beep(uint16_t hz, uint16_t ms) override;
   int batteryPercent() override { return batteryPercent_; }
   bool usbPowered() override { return usbPowered_; }
+  size_t loadBlob(const char* key, uint8_t* out, size_t capacity) override;
+  bool storeBlob(const char* key, const uint8_t* data, size_t size) override;  // emits "store"
+
+  // Where the board's flash lives (created if missing, one level). False if it is not a
+  // directory that can be used: the board then has no flash, as without the option.
+  bool setStateDir(const char* dir);
 
   // Simulator-side controls (what the hardware would decide, the UI decides here).
   void setBatteryPercent(int percent);
@@ -63,6 +74,7 @@ public:
 
 private:
   void blockFor(uint32_t ms);
+  bool blobPath(const char* key, const char* suffix, char* out, size_t outSize) const;
 
   Emitter& out_;
   const bool virtualTime_;
@@ -82,6 +94,7 @@ private:
   int batteryPercent_ = 80;
   bool usbPowered_ = false;
   double latencyScale_ = 1.0;
+  char stateDir_[1024] = {};          // "" = no flash
 
   std::mutex stopMutex_;
   std::condition_variable stopSignal_;

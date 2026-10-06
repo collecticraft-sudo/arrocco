@@ -4,6 +4,7 @@
 // The core draws with Adafruit_GFX into an 800x480 1-bit frame buffer and asks the
 // platform to push it to the panel. Nothing in the core may include Arduino.h directly.
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 class Adafruit_GFX;
@@ -41,6 +42,19 @@ public:
   virtual void beep(uint16_t hz, uint16_t ms) = 0;
   virtual int batteryPercent() = 0;                // -1 = no gauge found
   virtual bool usbPowered() = 0;
+
+  // Small blobs that must outlive a power cut: the game in progress (ui/saved_game.h).
+  // NVS on the device, one file per key in the simulator. `key` is 1 to 15 characters
+  // from a-z, 0-9, '-' and '_' (NVS stops at 15). Both calls block, usually for a few
+  // milliseconds, longer when the flash has to erase a page: the app makes them after
+  // present(), never between a tap and the refresh that answers it.
+  //
+  // Copies the blob stored under `key` into `out` and returns its size. 0 when nothing is
+  // stored, when it is larger than `capacity`, or when the store cannot be read.
+  virtual size_t loadBlob(const char* key, uint8_t* out, size_t capacity) = 0;
+  // Replaces the blob under `key` (size > 0). A power cut in the middle leaves the old blob
+  // or the new one, never a mix of the two. False when nothing could be written.
+  virtual bool storeBlob(const char* key, const uint8_t* data, size_t size) = 0;
 };
 
 // The application: owns the game and every screen. Implemented in arrocco/ui.

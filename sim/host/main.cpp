@@ -218,15 +218,21 @@ void handleLine(Session& s, const InputLine& input) {
 
 int main(int argc, char** argv) {
   bool virtualTime = false;
+  const char* stateDir = nullptr;
   for (int i = 1; i < argc; ++i) {
     if (strcmp(argv[i], "--virtual-time") == 0) {
       virtualTime = true;
+    } else if (strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
+      stateDir = argv[++i];
     } else {
       fprintf(stderr,
-              "usage: arrocco-sim [--virtual-time]\n"
+              "usage: arrocco-sim [--virtual-time] [--state DIR]\n"
               "Runs the Arrocco app on a simulated 800x480 e-ink panel and speaks a line\n"
               "protocol on stdin/stdout (see sim/host/protocol.h). Normally started by\n"
-              "sim/server.py; sim/run.sh does everything.\n");
+              "sim/server.py; sim/run.sh does everything.\n"
+              "  --state DIR   the board's flash (the saved game) lives in DIR, so that\n"
+              "                ending this process is a power cut and the next start\n"
+              "                offers \"Resume game\". Without it every start is a new board.\n");
       return strcmp(argv[i], "--help") == 0 ? 0 : 2;
     }
   }
@@ -237,6 +243,11 @@ int main(int argc, char** argv) {
 
   static arrocco_sim::Emitter out;
   static SimPlatform platform(out, virtualTime);
+  // Before the app exists: begin() is where it reads the saved game back.
+  if (stateDir != nullptr && !platform.setStateDir(stateDir)) {
+    fprintf(stderr, "arrocco-sim: cannot keep the board's flash in '%s' (not a usable directory)\n", stateDir);
+    return 2;
+  }
   arrocco::App* app = arrocco_sim::createApp(platform);
   if (!app) {
     fprintf(stderr, "arrocco-sim: createApp() returned no app\n");

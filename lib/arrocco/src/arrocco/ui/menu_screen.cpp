@@ -41,7 +41,16 @@ void drawTitle(Adafruit_GFX& gfx, const char* title, const char* subtitle) {
 
 void MenuScreen::draw(Adafruit_GFX& gfx) {
   drawTitle(gfx, str::kAppTitle, str::kAppSubtitle);
-  if (ctx_.gameInProgress()) drawButton(gfx, menuButtonRect(kSlotResume), Font::Bold12, str::kMenuResume);
+  if (ctx_.gameInProgress()) {
+    // "vs engine · move 12": which game it is, and the move it has reached. After a power
+    // cut this is the first thing on the glass, so it says enough to recognise the game.
+    char move[16];
+    snprintf(move, sizeof move, str::kResumeMoveFmt, ctx_.game.moveNumberOfPly(ctx_.game.plyCount()));
+    char note[48];
+    snprintf(note, sizeof note, "%s%c%s", ctx_.vsEngine ? str::kResumeVsEngine : str::kResumeTwoPlayers,
+             kNoteDot, move);
+    drawButton(gfx, menuButtonRect(kSlotResume), Font::Bold12, str::kMenuResume, true, note);
+  }
   drawButton(gfx, menuButtonRect(kSlotTwoPlayers), Font::Bold12, str::kMenuTwoPlayers);
   drawButton(gfx, menuButtonRect(kSlotEngine), Font::Bold12, str::kMenuEngine, ctx_.engineAvailable(),
              ctx_.engineAvailable() ? nullptr : str::kEngineMissing);
@@ -69,9 +78,11 @@ void MenuScreen::draw(Adafruit_GFX& gfx) {
 Action MenuScreen::onTap(int16_t x, int16_t y) {
   switch (menuButtonAt(x, y)) {
     case kSlotResume:
-      return ctx_.gameInProgress() ? Action::go(ScreenId::Game) : Action::none();
+      if (!ctx_.gameInProgress()) return Action::none();
+      ctx_.resumeClock(ctx_.platform.millis());   // a game back from a power cut: its clock starts now
+      return Action::go(ScreenId::Game);
     case kSlotTwoPlayers:
-      ctx_.vsEngine = false;
+      ctx_.setup.vsEngine = false;
       return Action::go(ScreenId::ClockPicker);
     case kSlotEngine:
       if (!ctx_.engineAvailable()) return Action::none();
@@ -109,7 +120,7 @@ Action ClockPickerScreen::onTap(int16_t x, int16_t y) {
   if (slot < 0) return Action::none();
   if (slot == kSlotClockBack) return Action::go(ScreenId::Menu);
   ctx_.settings.clockPreset = kClockBySlot[slot];
-  ctx_.startNewGame(ctx_.platform.millis());
+  ctx_.startSetUpGame(ctx_.platform.millis());
   // Deep is reserved for game start and game end: the one moment a 3 s flash is welcome.
   return Action::go(ScreenId::Game, Refresh::Deep);
 }
@@ -153,10 +164,10 @@ const char* humanSideLabel(HumanSide side) {
 
 void EngineSetupScreen::draw(Adafruit_GFX& gfx) {
   drawTitle(gfx, str::kEngineTitle, str::kEngineHint);
-  drawButton(gfx, menuButtonRect(kSlotSide), Font::Bold12, humanSideLabel(ctx_.humanSide));
+  drawButton(gfx, menuButtonRect(kSlotSide), Font::Bold12, humanSideLabel(ctx_.setup.humanSide));
 
   char level[48];
-  const int index = clampEngineLevel(ctx_.engineLevel);
+  const int index = clampEngineLevel(ctx_.setup.engineLevel);
   snprintf(level, sizeof level, str::kEngineLevelFmt, index + 1, kEngineLevels[index].name);
   drawButton(gfx, menuButtonRect(kSlotLevel), Font::Bold12, level);
 
@@ -165,17 +176,18 @@ void EngineSetupScreen::draw(Adafruit_GFX& gfx) {
 }
 
 Action EngineSetupScreen::onTap(int16_t x, int16_t y) {
+  GameSetup& setup = ctx_.setup;
   switch (menuButtonAt(x, y)) {
     case kSlotSide:
-      ctx_.humanSide = static_cast<HumanSide>((static_cast<int>(ctx_.humanSide) + 1) % 3);
+      setup.humanSide = static_cast<HumanSide>((static_cast<int>(setup.humanSide) + 1) % 3);
       return Action::repaint();
     case kSlotLevel:
-      ctx_.engineLevel = (clampEngineLevel(ctx_.engineLevel) + 1) % kEngineLevelCount;
+      setup.engineLevel = (clampEngineLevel(setup.engineLevel) + 1) % kEngineLevelCount;
       return Action::repaint();
     case kSlotEngineStart:
       if (!ctx_.engineAvailable()) return Action::none();
       // The clock picker starts the game; it only has to know which kind of game.
-      ctx_.vsEngine = true;
+      setup.vsEngine = true;
       return Action::go(ScreenId::ClockPicker);
     case kSlotEngineBack:
       return Action::go(ScreenId::Menu);

@@ -23,8 +23,14 @@ void drawCentered(Adafruit_GFX& gfx, Font font, const char* text, int16_t cx, in
 // Width in pixels of `text` in `font`.
 int16_t textWidth(Adafruit_GFX& gfx, Font font, const char* text);
 
+// The middle dot of a note such as "vs engine · move 12". The fonts stop at 7-bit ASCII,
+// so a note marks the place with this byte (outside them: Adafruit GFX neither draws nor
+// measures it) and drawButton() draws a dot there itself.
+constexpr char kNoteDot = '\x7f';
+
 // A framed, rounded button. A label too wide for it drops to Bold9 rather than spill over.
-// Disabled: a dotted frame and, when given, a small note under the label.
+// Disabled: a dotted frame. With a note, the label moves up and the note goes under it,
+// in small type, on a live button as on a disabled one.
 void drawButton(Adafruit_GFX& gfx, const Rect& r, Font font, const char* label, bool enabled = true,
                 const char* note = nullptr);
 

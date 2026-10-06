@@ -8,6 +8,10 @@ namespace arrocco::ui::str {
 constexpr char kAppTitle[] = "Arrocco";
 constexpr char kAppSubtitle[] = "e-ink chess";
 constexpr char kMenuResume[] = "Resume game";
+// Under "Resume game", joined by a drawn middle dot: "vs engine · move 12".
+constexpr char kResumeVsEngine[] = "vs engine";
+constexpr char kResumeTwoPlayers[] = "two players";
+constexpr char kResumeMoveFmt[] = "move %d";
 constexpr char kMenuTwoPlayers[] = "Two players";
 constexpr char kMenuEngine[] = "Play vs engine";
 constexpr char kMenuPuzzles[] = "Puzzles";

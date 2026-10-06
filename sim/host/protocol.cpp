@@ -116,6 +116,13 @@ void Emitter::state(int batteryPercent, bool usbPowered, double latencyScale) {
   endEvent();
 }
 
+void Emitter::store(const char* key, size_t bytes, bool ok, uint32_t timeMs) {
+  fputs("{\"ev\":\"store\",\"key\":", stdout);
+  writeJsonString(key ? key : "");
+  fprintf(stdout, ",\"bytes\":%zu,\"ok\":%s,\"t\":%u}", bytes, ok ? "true" : "false", timeMs);
+  endEvent();
+}
+
 void Emitter::error(const char* message, const char* detail) {
   fputs("{\"ev\":\"error\",\"msg\":", stdout);
   writeJsonString(message);

@@ -107,9 +107,11 @@ class Frame:
 
 # ---- the simulator driver ----------------------------------------------------------------
 class Sim:
-    def __init__(self, png_dir=None):
-        self.p = subprocess.Popen([SIM, "--virtual-time"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  text=True, bufsize=1)
+    def __init__(self, png_dir=None, args=()):
+        # `args` go to arrocco-sim after --virtual-time: resume_session.py gives it a
+        # --state directory; without one every start is a factory-fresh board.
+        self.p = subprocess.Popen([SIM, "--virtual-time"] + list(args), stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, text=True, bufsize=1)
         self.png_dir = png_dir
         self.events = []          # every event, in order
         self.frames = []          # every new (non-resend) frame
@@ -165,6 +167,16 @@ class Sim:
         self.send("quit")
         self.p.stdin.close()
         self.p.wait(timeout=10)
+
+    def kill(self):
+        """The power cut: SIGKILL, so that nothing in the process runs on the way out."""
+        self.p.kill()
+        self.p.wait(timeout=10)
+        for pipe in (self.p.stdin, self.p.stdout):
+            try:
+                pipe.close()
+            except OSError:
+                pass
 
     def last(self):
         return self.frames[-1]

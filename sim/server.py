@@ -7,11 +7,15 @@ http://127.0.0.1:8765, streams the child's events (frames, beeps, ...) to the br
 as Server-Sent Events and forwards the browser's pointer and control lines to the
 child's stdin. Normally started by sim/run.sh.
 
+The child keeps the board's flash (the saved game) in sim/build/state, so a restart is
+what pulling the cable is on the board: the game in progress comes back as "Resume
+game". --state DIR puts the flash elsewhere; --no-state makes every start a new board.
+
 HTTP surface (all on 127.0.0.1 only):
   GET  /                 the page (static files from sim/web/)
   GET  /events           Server-Sent Events: one JSON object per message
   POST /input            text/plain, one protocol line per line (see host/protocol.h)
-  POST /restart          start the app again from scratch
+  POST /restart          start the app again, as after a power cut: the flash survives
   GET  /state            JSON summary (counters, controls, child alive)
   GET  /frame            JSON of the last frame; ?after=ID&timeout=S long-polls for a newer one
   GET  /frame.png        the last frame as a plain 1-bit PNG (no e-ink emulation)
@@ -52,6 +56,7 @@ from urllib.parse import parse_qs, urlparse
 SIM_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(SIM_DIR, "web")
 DEFAULT_BINARY = os.path.join(SIM_DIR, "build", "arrocco-sim")
+DEFAULT_STATE = os.path.join(SIM_DIR, "build", "state")
 DEFAULT_PORT = 8765
 
 LICHESS_HOST = "lichess.org"
@@ -211,10 +216,11 @@ class Hub:
 class SimProcess:
     """Owns the arrocco-sim child: start, feed, restart, and above all stop."""
 
-    def __init__(self, binary, hub, port=DEFAULT_PORT):
+    def __init__(self, binary, hub, port=DEFAULT_PORT, state_dir=None):
         self.binary = binary
         self.hub = hub
         self.port = port
+        self.state_dir = state_dir     # the board's flash; None = a new board at every start
         self.lock = threading.Lock()
         self.proc = None
         self.generation = 0
@@ -231,8 +237,11 @@ class SimProcess:
         env = dict(os.environ)
         env.pop("ARROCCO_LICHESS_TOKEN", None)
         env["ARROCCO_SIM_PROXY"] = "127.0.0.1:%d" % self.port
+        command = [self.binary]
+        if self.state_dir:
+            command += ["--state", self.state_dir]
         self.proc = subprocess.Popen(
-            [self.binary], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             start_new_session=True, env=env)
         self.generation += 1
         threading.Thread(target=self._pump, args=(self.proc, self.generation),
@@ -793,6 +802,10 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="log every HTTP request")
     parser.add_argument("--proxy-only", action="store_true",
                         help="serve the Lichess proxy alone: no simulator child, no web page")
+    parser.add_argument("--state", default=DEFAULT_STATE, metavar="DIR",
+                        help="where the board's flash (the saved game) lives; default sim/build/state")
+    parser.add_argument("--no-state", action="store_true",
+                        help="no flash: every start, restart included, is a new board")
     args = parser.parse_args()
 
     if not args.proxy_only:
@@ -810,7 +823,13 @@ def main():
                  % (args.port, error.strerror or error, args.port))
 
     hub = Hub()
-    sim = None if args.proxy_only else SimProcess(args.binary, hub, args.port)
+    state_dir = None if args.no_state or args.proxy_only else args.state
+    if state_dir:
+        try:
+            os.makedirs(state_dir, exist_ok=True)
+        except OSError as error:
+            sys.exit("server.py: cannot create the state directory %s (%s)" % (state_dir, error))
+    sim = None if args.proxy_only else SimProcess(args.binary, hub, args.port, state_dir)
     httpd.hub, httpd.sim, httpd.verbose = hub, sim, args.verbose
     httpd.proxy = LichessProxy()
 

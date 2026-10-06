@@ -1,11 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "esp32_platform.h"
 
+#include <Preferences.h>
+
 #include "config.h"
 #include "gauge.h"
 #include "gt911.h"
 #include "log.h"
 #include "panel.h"
+
+namespace {
+
+// The saved game's own NVS namespace: the WiFi network and the Lichess token keep theirs.
+constexpr char kStoreNamespace[] = "arrocco-game"; // NVS namespaces stop at 15 characters
+
+} // namespace
 
 void Esp32Platform::begin() {
   buzzerOk_ = ledcAttach(cfg::kBuzzer, 1000, 10);
@@ -96,6 +105,56 @@ int Esp32Platform::batteryPercent() { return gauge::percent(); }
 // power from battery power. The USB-CDC "host connected" state is not a substitute (a
 // charger or power bank enumerates nothing). Hardware limit: always false.
 bool Esp32Platform::usbPowered() { return false; }
+
+// ---------- the saved game: NVS ----------
+//
+// One key per blob, written whole. NVS makes each write atomic (a power cut leaves the
+// old value or the new one) and spreads the wear by itself: it appends every write to its
+// partition (default_16MB.csv: 20 KB, five 4 KB sectors) and erases a sector only when it
+// is full of stale copies. A saved game is 27 bytes plus two a ply, which NVS stores in
+// 32-byte entries (126 to a sector) plus two of bookkeeping. Estimated, not measured: a
+// 40-move game saved after every ply writes about 470 entries, four sector erases spread
+// over five sectors; a 100-move game about fifteen. Against ~100,000 erase cycles per
+// sector that is tens of thousands of games. A write should take a few milliseconds, and
+// some tens more when NVS has to erase a sector first: the SAVE line logs the real time.
+
+size_t Esp32Platform::loadBlob(const char* key, uint8_t* out, size_t capacity) {
+  const uint32_t start = ::millis();
+  Preferences p;
+  // Read-write: on a board that never stored anything this creates the namespace, where a
+  // read-only open would log an nvs_open error at every boot. Opening writes nothing else.
+  if (!p.begin(kStoreNamespace, false)) {
+    logLine("SAVE  WARNING NVS namespace %s does not open: nothing read back", kStoreNamespace);
+    return 0;
+  }
+  size_t size = 0;
+  if (p.isKey(key)) { // asked first: getBytesLength() logs an error for a key that is not there
+    size = p.getBytesLength(key);
+    if (size == 0 || size > capacity || p.getBytes(key, out, capacity) != size) size = 0;
+  }
+  p.end();
+  logLine("SAVE  read back '%s': %u bytes in %lu ms", key, static_cast<unsigned>(size),
+          static_cast<unsigned long>(::millis() - start));
+  return size;
+}
+
+bool Esp32Platform::storeBlob(const char* key, const uint8_t* data, size_t size) {
+  const uint32_t start = ::millis();
+  Preferences p;
+  bool ok = p.begin(kStoreNamespace, false);
+  if (ok) {
+    ok = p.putBytes(key, data, size) == size;
+    p.end();
+  }
+  const unsigned long took = static_cast<unsigned long>(::millis() - start);
+  if (ok) {
+    logLine("SAVE  wrote '%s': %u bytes in %lu ms", key, static_cast<unsigned>(size), took);
+  } else {
+    logLine("SAVE  WARNING '%s' not written (%u bytes, %lu ms): NVS refused it", key,
+            static_cast<unsigned>(size), took);
+  }
+  return ok;
+}
 
 // ---------- loop services ----------
 

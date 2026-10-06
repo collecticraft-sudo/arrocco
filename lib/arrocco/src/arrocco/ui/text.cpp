@@ -2,6 +2,8 @@
 // Arrocco UI — text and widget primitives. See text.h.
 #include "arrocco/ui/text.h"
 
+#include <cstring>
+
 #include <Adafruit_GFX.h>
 #include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/FreeSans9pt7b.h>
@@ -21,9 +23,65 @@ constexpr int16_t kDialogTitleOffset = 36;     // title baseline below the box t
 constexpr int16_t kDialogSubtitleOffset = 66;
 constexpr int16_t kButtonLabelMargin = 8;      // label must leave this much inside the frame
 
+constexpr int16_t kNoteDotGap = 13;            // ink to ink around a kNoteDot; the dot sits in the middle
+constexpr int16_t kNoteDotSize = 3;            // a square of 3 x 3 px: a period is about 2 x 2
+
 Font fittingFont(Adafruit_GFX& gfx, const Rect& r, Font font, const char* label) {
   if (textWidth(gfx, font, label) <= r.w - kButtonLabelMargin) return font;
   return font == Font::Bold12 ? Font::Bold9 : Font::Sans9;
+}
+
+// The ink box of `text` in the current font, for a cursor at (0, 0) on the baseline.
+struct Bounds {
+  int16_t x = 0;
+  int16_t y = 0;      // negative: the ink starts above the baseline
+  int16_t w = 0;
+  int16_t h = 0;
+};
+
+Bounds boundsOf(Adafruit_GFX& gfx, const char* text) {
+  Bounds b;
+  uint16_t w = 0;
+  uint16_t h = 0;
+  gfx.getTextBounds(text, 0, 0, &b.x, &b.y, &w, &h);
+  b.w = static_cast<int16_t>(w);
+  b.h = static_cast<int16_t>(h);
+  return b;
+}
+
+// A button's note in Sans9, centred on (cx, cy) as drawCentered() centres text. The
+// first kNoteDot splits it into two runs with a dot between them, level with the middle
+// of a lower-case letter.
+void drawNote(Adafruit_GFX& gfx, const char* note, int16_t cx, int16_t cy) {
+  const char* dot = strchr(note, kNoteDot);
+  if (dot == nullptr) {
+    drawCentered(gfx, Font::Sans9, note, cx, cy);
+    return;
+  }
+  char left[48];
+  size_t leftLength = static_cast<size_t>(dot - note);
+  if (leftLength > sizeof left - 1) leftLength = sizeof left - 1;
+  memcpy(left, note, leftLength);
+  left[leftLength] = '\0';
+  const char* right = dot + 1;
+
+  setFont(gfx, Font::Sans9);
+  // One baseline for both runs, from the bounds of the whole note: the marker byte has no
+  // glyph, so those are the bounds of the words alone.
+  const Bounds all = boundsOf(gfx, note);
+  const int16_t baseline = static_cast<int16_t>(cy - all.h / 2 - all.y);
+  const Bounds l = boundsOf(gfx, left);
+  const Bounds r = boundsOf(gfx, right);
+  const int16_t inkX = static_cast<int16_t>(cx - (l.w + kNoteDotGap + r.w) / 2);
+  gfx.setCursor(static_cast<int16_t>(inkX - l.x), baseline);
+  gfx.print(left);
+  gfx.setCursor(static_cast<int16_t>(inkX + l.w + kNoteDotGap - r.x), baseline);
+  gfx.print(right);
+
+  const Bounds x = boundsOf(gfx, "x");
+  const int16_t dotX = static_cast<int16_t>(inkX + l.w + (kNoteDotGap - kNoteDotSize) / 2);
+  const int16_t dotY = static_cast<int16_t>(baseline + x.y + (x.h - kNoteDotSize) / 2);
+  gfx.fillRect(dotX, dotY, kNoteDotSize, kNoteDotSize, kBlack);
 }
 
 }  // namespace
@@ -79,23 +137,23 @@ void drawButton(Adafruit_GFX& gfx, const Rect& r, Font requested, const char* la
     gfx.drawRoundRect(static_cast<int16_t>(r.x + 1), static_cast<int16_t>(r.y + 1),
                       static_cast<int16_t>(r.w - 2), static_cast<int16_t>(r.h - 2),
                       static_cast<int16_t>(kButtonRadius - 1), kBlack);
-    drawCentered(gfx, font, label, r.cx(), r.cy());
-    return;
-  }
-  // Disabled: a dotted single frame, the label pushed up to leave room for the note.
-  for (int16_t i = 0; i < r.w; i += 3) {
-    gfx.drawPixel(static_cast<int16_t>(r.x + i), r.y, kBlack);
-    gfx.drawPixel(static_cast<int16_t>(r.x + i), static_cast<int16_t>(r.y + r.h - 1), kBlack);
-  }
-  for (int16_t i = 0; i < r.h; i += 3) {
-    gfx.drawPixel(r.x, static_cast<int16_t>(r.y + i), kBlack);
-    gfx.drawPixel(static_cast<int16_t>(r.x + r.w - 1), static_cast<int16_t>(r.y + i), kBlack);
+  } else {
+    // Disabled: a dotted single frame.
+    for (int16_t i = 0; i < r.w; i += 3) {
+      gfx.drawPixel(static_cast<int16_t>(r.x + i), r.y, kBlack);
+      gfx.drawPixel(static_cast<int16_t>(r.x + i), static_cast<int16_t>(r.y + r.h - 1), kBlack);
+    }
+    for (int16_t i = 0; i < r.h; i += 3) {
+      gfx.drawPixel(r.x, static_cast<int16_t>(r.y + i), kBlack);
+      gfx.drawPixel(static_cast<int16_t>(r.x + r.w - 1), static_cast<int16_t>(r.y + i), kBlack);
+    }
   }
   if (note == nullptr) {
     drawCentered(gfx, font, label, r.cx(), r.cy());
   } else {
+    // The label pushed up to leave room for the note.
     drawCentered(gfx, font, label, r.cx(), static_cast<int16_t>(r.cy() - 8));
-    drawCentered(gfx, Font::Sans9, note, r.cx(), static_cast<int16_t>(r.cy() + 12));
+    drawNote(gfx, note, r.cx(), static_cast<int16_t>(r.cy() + 12));
   }
 }
 

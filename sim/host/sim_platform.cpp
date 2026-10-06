@@ -2,8 +2,11 @@
 // Arrocco simulator — SimPlatform implementation. See sim_platform.h.
 #include "sim_platform.h"
 
+#include <errno.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 namespace arrocco_sim {
 
@@ -16,6 +19,18 @@ uint32_t nominalRefreshMs(arrocco::Refresh kind) {
     case arrocco::Refresh::Deep:    return kDeepMs;
   }
   return kPartialMs;
+}
+
+// The keys Platform::loadBlob / storeBlob accept: what NVS takes as a key, and nothing
+// that could leave the state directory as a file name.
+bool validKey(const char* key) {
+  if (key == nullptr || key[0] == '\0') return false;
+  for (size_t n = 0; key[n] != '\0'; ++n) {
+    const char c = key[n];
+    const bool allowed = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+    if (!allowed || n >= 15) return false;
+  }
+  return true;
 }
 
 }  // namespace
@@ -103,6 +118,57 @@ void SimPlatform::panelOff() {
 void SimPlatform::beep(uint16_t hz, uint16_t ms) {
   // tone() on the device does not block either: the buzzer plays while the code goes on.
   out_.beep(hz, ms, millis());
+}
+
+// ---- the board's flash: one file per key --------------------------------------------
+
+bool SimPlatform::setStateDir(const char* dir) {
+  stateDir_[0] = '\0';
+  if (dir == nullptr || dir[0] == '\0' || strlen(dir) >= sizeof stateDir_) return false;
+  if (mkdir(dir, 0755) != 0 && errno != EEXIST) return false;
+  struct stat info;
+  if (stat(dir, &info) != 0 || !S_ISDIR(info.st_mode)) return false;
+  snprintf(stateDir_, sizeof stateDir_, "%s", dir);
+  return true;
+}
+
+bool SimPlatform::blobPath(const char* key, const char* suffix, char* out, size_t outSize) const {
+  if (stateDir_[0] == '\0' || !validKey(key)) return false;
+  const int n = snprintf(out, outSize, "%s/%s%s", stateDir_, key, suffix);
+  return n > 0 && static_cast<size_t>(n) < outSize;
+}
+
+size_t SimPlatform::loadBlob(const char* key, uint8_t* out, size_t capacity) {
+  char path[sizeof stateDir_ + 32];
+  if (out == nullptr || capacity == 0 || !blobPath(key, ".bin", path, sizeof path)) return 0;
+  FILE* file = fopen(path, "rb");
+  if (file == nullptr) return 0;
+  const size_t got = fread(out, 1, capacity, file);
+  // A blob larger than `capacity` is no blob at all, as the interface says.
+  const bool tooLarge = got == capacity && fgetc(file) != EOF;
+  const bool failed = ferror(file) != 0;
+  fclose(file);
+  return (tooLarge || failed) ? 0 : got;
+}
+
+bool SimPlatform::storeBlob(const char* key, const uint8_t* data, size_t size) {
+  char path[sizeof stateDir_ + 32];
+  char temp[sizeof stateDir_ + 32];
+  if (!blobPath(key, ".bin", path, sizeof path) || !blobPath(key, ".tmp", temp, sizeof temp)) return false;
+  // Written beside the old file, then renamed over it: rename() is atomic, so a process
+  // killed at any moment leaves the old blob or the new one, as NVS does after a power cut.
+  bool ok = data != nullptr && size > 0;
+  FILE* file = ok ? fopen(temp, "wb") : nullptr;
+  if (file != nullptr) {
+    ok = fwrite(data, 1, size, file) == size;
+    ok = fclose(file) == 0 && ok;
+    ok = ok && rename(temp, path) == 0;
+    if (!ok) remove(temp);
+  } else {
+    ok = false;
+  }
+  out_.store(key, size, ok, millis());
+  return ok;
 }
 
 void SimPlatform::setBatteryPercent(int percent) {
