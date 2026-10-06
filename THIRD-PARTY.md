@@ -23,15 +23,15 @@ GxEPD2 is the reason the firmware is GPL-3.0 already. All the other licences abo
 
 **Simulator.** `sim/` compiles the same Adafruit GFX sources for the Mac. Its server uses only the Python standard library and its web page loads no external scripts.
 
-## Planned, not included yet
+## Included in the repository
 
-| Component | Licence | Role |
-|---|---|---|
-| [CT800](https://www.ct800.net/) chess engine by Rasmus Althoff | GPL-3.0-or-later | offline opponent |
-| [Lichess puzzle database](https://database.lichess.org/#puzzles) | CC0 | offline puzzle pack |
-
-Neither is in the repository or in the builds yet. The CT800 sources have not been downloaded; this file will be updated with the exact version when they are.
+| Component | Version | Licence | Role |
+|---|---|---|---|
+| [CT800](https://www.ct800.net/) chess engine by Rasmus Althoff | V1.46 | GPL-3.0-or-later | offline opponent; imported unmodified in `lib/ct800/upstream/` (see `ARROCCO-IMPORT.md` there), Arrocco's front end in `lib/ct800/port/` |
+| [Lichess puzzle database](https://database.lichess.org/#puzzles) | selection of 3500 puzzles | CC0 1.0 Universal | offline puzzle pack in `lib/arrocco/src/arrocco/puzzles/`; how it was built: [docs/puzzles.md](docs/puzzles.md) |
 
 ## Artwork
 
 The piece set in `assets/pieces/` is original CollectiCraft artwork, released with the rest of the project under GPL-3.0-or-later. No third-party piece set is used.
+
+The sleep screen in `lib/arrocco/src/arrocco/ui/sleep_art.h` is Vincent van Gogh's *The Starry Night* (1889), which is in the public domain: the Google Art Project scan on [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg), marked public domain there, cropped to 800 × 480 and dithered to 1 bit by `assets/sleep/make_sleep_art.py`.
