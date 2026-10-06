@@ -14,8 +14,7 @@ constexpr char kMenuPuzzles[] = "Puzzles";
 constexpr char kMenuLichess[] = "Lichess";
 constexpr char kMenuSettings[] = "Settings";
 constexpr char kComingSoon[] = "coming soon";
-constexpr char kBatteryFmt[] = "Battery %d%%";
-constexpr char kBatteryNoGauge[] = "Battery: no gauge";
+constexpr char kBatteryFmt[] = "Battery %d%%";        // nothing at all without a gauge
 constexpr char kUsbPowered[] = "USB power";
 
 // Play vs engine — setup screen

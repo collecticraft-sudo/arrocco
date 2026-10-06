@@ -1,6 +1,6 @@
 # Arrocco — decisioni di progetto
 
-Aggiornato il 21 settembre 2026. Questo file è la fonte di verità: se il codice o un altro documento lo contraddice, ha ragione questo file (oppure va aggiornato qui per primo).
+Aggiornato il 6 ottobre 2026. Questo file è la fonte di verità: se il codice o un altro documento lo contraddice, ha ragione questo file (oppure va aggiornato qui per primo).
 
 Nome pubblico: **Arrocco — e-ink chess**, by CollectiCraft. Mai "Atlas" né "replica" in nomi, immagini o descrizioni: al massimo "an open alternative to commercial e-ink chessboards".
 
@@ -50,6 +50,7 @@ Collegamento FTS02 (pannello 7,5" nella presa TP-FPC2/P7, flat inserito **girato
 - Primo tocco su un pezzo: **cornice + pallini sulle mosse legali**, in un refresh.
 - Pezzi: **set CollectiCraft disegnato da Fabrizio** (1 bit, sagoma + maschera bianca). Fino ad allora un set provvisorio disegnato dal firmware.
 - Interfaccia **solo in inglese**, con tutte le stringhe in un file unico.
+- Nel piede del menu la percentuale della batteria c'è solo se c'è il misuratore (MAX17048): senza, il menu della batteria **non dice niente**.
 
 ## Gioco
 - Offline per tutti, dai bambini al circolo: livelli con nomi sopra l'Elo di CT-800, più livelli facili sotto i 1000.

@@ -27,6 +27,7 @@ from sim_session import (SIM, Sim, Session, check, center, square_rect, is_board
 CONFIRM_BOX = (64, 120, 352, 232)
 CONFIRM_BTN = lambda i: (80, 120 + 56 + i * 56, 320, 48)     # resign / draw / cancel
 MENU_SLOT_RESUME = 0
+FOOTER_BATTERY = (16, 448, 200, 24)                           # "Battery 80%", bottom left of the menu
 KING_RING = lambda name: square_rect(name)                    # ring hugs the halo: square ink jumps
 
 
@@ -305,6 +306,15 @@ def main():
     sim.sync()
     check(len(sim.tick(1000)) == 1, "menu: USB unplugged -> one repaint")
     check(len(sim.tick(1000)) == 0, "menu: nothing changed -> no repaint")
+    # No gauge (no MAX17048 on the board): the footer says nothing about the battery at all.
+    sim.send("set battery -1")
+    sim.sync()
+    gone = sim.tick(30000)
+    check(len(gone) == 1 and gone[0].ink(FOOTER_BATTERY) == 0, "menu: no gauge -> no battery line, not even 'no gauge'")
+    sim.send("set battery 40")
+    sim.sync()
+    back = sim.tick(30000)
+    check(len(back) == 1 and back[0].ink(FOOTER_BATTERY) > 40, "menu: the gauge is back -> 'Battery 40%' again")
 
     # ---- settings + panel off ------------------------------------------------------------------
     ses.step("Settings", *center(MENU_BTN(MENU_SLOT_SETTINGS)), kind="full")

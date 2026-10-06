@@ -49,17 +49,16 @@ void MenuScreen::draw(Adafruit_GFX& gfx) {
   drawButton(gfx, menuButtonRect(kSlotLichess), Font::Bold12, str::kMenuLichess, false, str::kComingSoon);
   drawButton(gfx, menuButtonRect(kSlotSettings), Font::Bold12, str::kMenuSettings);
 
-  // Footer: what the platform knows about power, as of this refresh.
+  // Footer: what the platform knows about power, as of this refresh. A board without a
+  // gauge knows nothing about its battery, and then the footer says nothing about it.
   shownBattery_ = ctx_.platform.batteryPercent();
   shownUsb_ = ctx_.platform.usbPowered();
   shownAtMs_ = ctx_.platform.millis();
-  char line[40];
-  if (shownBattery_ < 0) {
-    snprintf(line, sizeof line, "%s", str::kBatteryNoGauge);
-  } else {
+  if (shownBattery_ >= 0) {
+    char line[24];
     snprintf(line, sizeof line, str::kBatteryFmt, shownBattery_);
+    drawText(gfx, Font::Sans9, 16, kMenuFooterBaseline, line);
   }
-  drawText(gfx, Font::Sans9, 16, kMenuFooterBaseline, line);
   if (shownUsb_) {
     const int16_t w = textWidth(gfx, Font::Sans9, str::kUsbPowered);
     drawText(gfx, Font::Sans9, static_cast<int16_t>(arrocco::kScreenW - 16 - w), kMenuFooterBaseline,
