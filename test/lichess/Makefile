@@ -22,7 +22,9 @@ DEPS        := $(CHESS_SRC) $(LICHESS_SRC) $(HEADERS) $(wildcard $(CORE)/arrocco
 
 .PHONY: test offline live headers clean
 
-test: offline live
+# `live` plays and resigns a real game on the Lichess account whose token is stored on
+# this Mac: it runs only when asked for by name, never as part of `test`.
+test: offline
 
 offline: headers $(BUILD)/unit $(BUILD)/attack
 	@echo "== $(BUILD)/unit"

@@ -39,7 +39,9 @@ void Esp32Platform::present(arrocco::Refresh kind) {
   // skipped: the buffer is always the whole screen, so the first refresh that works
   // shows the current state.
   panel::setBusyTimeoutMs(panel::stats().responding ? panel::kBusyTimeoutMs : kDeadPanelBusyMs);
-  // Whatever was tapped while the glass was updating is discarded, never replayed.
+  // The reports read while the glass was updating are flushed here. main.cpp may still
+  // deliver one tap from that window, when touch_policy.h judges that the screen under
+  // it did not change.
   heldAfterRefresh_ = gt911::flush();
   refreshed_ = true;
 }
