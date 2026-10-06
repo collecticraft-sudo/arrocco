@@ -95,6 +95,9 @@ class LichessGameScreen final : public Screen {
   uint32_t lostSinceMs_ = 0;       // the game stream went quiet at this time (0 = it is fine)
   bool reconnecting_ = false;      // ... for more than kReconnectNoteMs: the panel says so
   bool opponentNoted_ = false;
+  char shownGameId_[16] = {};      // the game the orientation belongs to: Menu and back keep a Flip
+  chess::Color orientedFor_ = chess::Color::White;  // the colour the board was turned for
+  bool userFlipped_ = false;       // Flip was tapped: the board stays as the user turned it
 };
 
 }  // namespace arrocco::ui

@@ -384,8 +384,9 @@ void FakeLichess::respond(Method method, const std::string& path, const std::str
   }
   const std::string game = "/api/board/game/" + gameId_ + "/";
   if (method == Method::Post && path == "/api/challenge/ai") {
+    // No colour asked for: Lichess draws it, and here it always draws Black for us.
     const std::string colour = formValue(body, "color");
-    const Color us = colour == "black" ? Color::Black : Color::White;
+    const Color us = colour == "white" ? Color::White : Color::Black;
     const int level = std::atoi(formValue(body, "level").c_str());
     const int limit = std::atoi(formValue(body, "clock.limit").c_str());
     const int increment = std::atoi(formValue(body, "clock.increment").c_str());

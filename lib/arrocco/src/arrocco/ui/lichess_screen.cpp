@@ -282,7 +282,7 @@ uint32_t LichessScreen::viewHash() const {
       h = hashNumber(h, static_cast<uint32_t>(s.invitationCount()));
       if (c.inGame()) {
         h = hashText(h, c.opponentName());
-        h = hashNumber(h, static_cast<uint32_t>(s.game.plyCount()));
+        h = hashNumber(h, static_cast<uint32_t>(s.game.moveNumberOfPly(s.game.plyCount())));   // the note's "move 12"
       }
       break;
     }
@@ -372,8 +372,8 @@ Action LichessScreen::tickHub() {
     s.origin = LichessOrigin::Found;
     return Action::go(ScreenId::LichessGame, Refresh::Deep);
   }
-  // The game left running behind the menu is over: its result belongs on the glass.
-  if (shownPlaying_ && c.state() == ClientState::Finished) return Action::go(ScreenId::LichessGame, Refresh::Deep);
+  // The game left running behind a menu is over: its result belongs on the glass, once.
+  if (c.state() == ClientState::Finished && !s.resultShown) return Action::go(ScreenId::LichessGame, Refresh::Deep);
   // /api/account answered 429: the client waits the minute out, then this asks again.
   if (c.state() == ClientState::Connecting && !c.busy() && c.backoffRemainingMs() == 0) c.begin();
   if (!changed()) return Action::none();

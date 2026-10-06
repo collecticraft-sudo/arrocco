@@ -63,6 +63,10 @@ class LichessState {
   // last one (the computer again, or a challenge to the same person) when it opens.
   bool playAgain = false;
   char lastOpponent[kMaxUsername + 1] = {};   // the human of the last game, "" after the computer
+  // The end of the last game has been on the glass. False while a game runs: one that ends while
+  // the user is elsewhere (the Lichess menu, the main menu, an offline game) shows its result the
+  // next time the Lichess screens are on.
+  bool resultShown = true;
 
   // Every tick, from ChessApp::tick(): the client's poll(), and nothing that draws.
   void poll() { client.poll(); }

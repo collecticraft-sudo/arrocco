@@ -82,15 +82,27 @@ void LichessGameScreen::enter() {
   LichessState& s = st();
   s.game.goToLatest();
   deselect();
+  // A move still on its way (sent before Menu) is shown as sent again: the client still has it.
   sent_ = Move::none();
   sentAtPly_ = -1;
+  if (s.client.queuedMove()[0] != '\0') {
+    sent_ = s.game.position().parseUci(s.client.queuedMove());
+    sentAtPly_ = s.game.plyCount();
+  }
   refused_[0] = '\0';
   lostSinceMs_ = 0;
   reconnecting_ = false;
   opponentNoted_ = false;
   mode_ = s.client.state() == ClientState::Finished ? Mode::Over : Mode::Play;
-  // Our side at the bottom, unless the owner asked for the board the other way round.
-  flipped_ = (s.client.ourColor() == Color::Black) != ctx_.settings.flipByDefault;
+  s.resultShown = mode_ == Mode::Over;
+  // Our side at the bottom, unless the owner asked for the board the other way round; back from
+  // the menu to the same game, the board stays the way it was turned.
+  if (std::strcmp(shownGameId_, s.client.gameId()) != 0) {
+    orientedFor_ = s.client.ourColor();
+    flipped_ = (orientedFor_ == Color::Black) != ctx_.settings.flipByDefault;
+    userFlipped_ = false;
+    formatText(shownGameId_, sizeof shownGameId_, "%s", s.client.gameId());
+  }
   noteOpponent();
   snapshot();
 }
@@ -359,16 +371,34 @@ Action LichessGameScreen::onTick(uint32_t now) {
     // The session went away under the game (the Lichess menu ended it): nothing to show here.
     return Action::go(ScreenId::Lichess);
   }
-  if (mode_ == Mode::Over || mode_ == Mode::Review) return Action::none();
+  if (mode_ == Mode::Over || mode_ == Mode::Review) {
+    // A new game started under the result of the old one (from the phone): it is the new one
+    // that the board shows from now on.
+    if (c.inGame()) {
+      enter();
+      return Action::repaint(Refresh::Deep);
+    }
+    return Action::none();
+  }
 
   if (state == ClientState::Finished) {
     mode_ = Mode::Over;
+    s.resultShown = true;
     deselect();
     sent_ = Move::none();
     s.game.goToLatest();
     ctx_.play(Sound::GameOver);
     snapshot();
     return Action::repaint(Refresh::Deep);   // game end: the one moment a long refresh is welcome
+  }
+
+  // Our colour is known for sure only from the gameFull (Lichess draws it for a random game):
+  // the board turns to it, unless the user turned it already.
+  if (!userFlipped_ && c.ourColor() != orientedFor_) {
+    orientedFor_ = c.ourColor();
+    flipped_ = (orientedFor_ == Color::Black) != ctx_.settings.flipByDefault;
+    snapshot();
+    return Action::repaint(Refresh::Full);
   }
 
   // The connection, as the panel tells it: only a drop that lasts is news.
@@ -519,6 +549,7 @@ Action LichessGameScreen::onButton(int slot) {
   else if (label == str::kOnlineClaimWin) sent = c.claimVictory();
   else if (label == str::kButtonFlip) {
     flipped_ = !flipped_;
+    userFlipped_ = true;
     return Action::repaint(Refresh::Full);   // every square changes: one flash, no ghost
   } else if (label == str::kButtonMenu) {
     deselect();
@@ -561,7 +592,10 @@ Action LichessGameScreen::onReviewTap(int16_t x, int16_t y) {
   switch (sideButtonAt(x, y)) {
     case kRevPrev:    return game.stepBack() ? Action::pauseRepaint() : Action::none();
     case kRevNext:    return game.stepForward() ? Action::pauseRepaint() : Action::none();
-    case kRevFlip:    flipped_ = !flipped_; return Action::repaint(Refresh::Full);
+    case kRevFlip:
+      flipped_ = !flipped_;
+      userFlipped_ = true;
+      return Action::repaint(Refresh::Full);
     case kRevResult:
       game.goToLatest();
       mode_ = Mode::Over;

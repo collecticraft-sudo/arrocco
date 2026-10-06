@@ -125,9 +125,13 @@ Due strade, come da `decisioni.md`:
   di 29 x 29 moduli da 12 pixel, cioe' 2,4 mm l'uno: il doppio, molto piu' facile da leggere
   da un telefono su un e-paper a 125 PPI. E l'indirizzo corto e' scritto sotto ("Or open
   http://192.168.1.50/login on the phone"), cosi chi ha la fotocamera che non legge lo puo'
-  scrivere a mano. Non cambia niente per la sicurezza: `/login` esiste solo mentre il login
-  aspetta (la stessa finestra di `/oauth/callback`) e manda soltanto all'indirizzo che il QR
-  lungo avrebbe mostrato; il *verifier* della PKCE non lascia mai la scheda. Se il telefono
+  scrivere a mano. `/login` esiste solo mentre il login aspetta (la stessa finestra di 10
+  minuti di `/oauth/callback`) e manda soltanto all'indirizzo che il QR lungo avrebbe
+  mostrato; il *verifier* della PKCE e il token non lasciano mai la scheda. Cosa cambia: in
+  quei 10 minuti chiunque sia sulla stessa rete e conosca l'indirizzo della scacchiera puo'
+  aprire `/login` come il telefono, e al peggio collegarla al **proprio** account invece che al
+  vostro (si vedrebbe subito: "Signed in as ..."). Con il QR lungo serviva vedere lo schermo.
+  Su una rete di casa e' accettabile; *Unlink account* rimette tutto a posto. Se il telefono
   non e' sulla rete della scacchiera, il problema si vede subito (la pagina non si apre),
   invece che dopo aver autorizzato su Lichess.
 

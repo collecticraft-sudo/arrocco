@@ -13,7 +13,8 @@ state": every request, every stream, the moves on its side).
   3. invitations: decline one, a bullet one refused, accept one, abort
   4. a friend: the keyboard, recent opponents (kept in flash), declined, cancelled, accepted,
      a draw offered both ways
-  5. errors: no Wi-Fi, a refused token (401), a 429 on a move, a dropped game stream, a slow
+  5. a game left running behind the menu: its end comes to the glass by itself, once
+  6. errors: no Wi-Fi, a refused token (401), a 429 on a move, a dropped game stream, a slow
      network, a lost request, a POST that timed out but arrived: no move lost, none doubled
 
 The QR codes on the glass are read back with the Mac's own detector (test/ui/qr_decode.m,
@@ -258,6 +259,9 @@ def scenario_computer(png):
     s.at("lichess", "computer", "the computer's page")
     s.tap(MENU_BTN(COMP_LEVEL), "level 4", kind="partial")
     s.tap(MENU_BTN(COMP_LEVEL), "level 5", kind="partial")
+    s.tap(MENU_BTN(COMP_COLOUR), "you play Black", kind="partial")
+    s.tap(MENU_BTN(COMP_COLOUR), "colour drawn by Lichess", kind="partial")
+    s.tap(MENU_BTN(COMP_COLOUR), "you play White", kind="partial")
     s.tap(MENU_BTN(COMP_CLOCK), "clock 15 + 10", kind="partial")
     s.tap(MENU_BTN(COMP_CLOCK), "clock 30 + 0", kind="partial")
     s.tap(MENU_BTN(COMP_CLOCK), "clock 5 + 0", kind="partial")
@@ -462,12 +466,30 @@ def scenario_friend(png, state_dir):
     s.quit()
 
 
-# ---- 5. errors ----------------------------------------------------------------------------------------------
+# ---- 5, 6. a game behind the menu, and errors --------------------------------------------------------------------
 def start_ai_game(s):
     linked_hub(s)
     s.tap(MENU_BTN(HUB_PLAY), "hub: Play the computer", kind="full")
     s.tap(MENU_BTN(COMP_START), "Start the game", kind="partial")
     return s.tick(10, "the game", frames=1, kind="deep")
+
+
+def scenario_background(png):
+    """A game left running behind the Lichess menu ends there: its result comes to the glass by
+    itself, once; and a game started from the phone takes the screen by itself."""
+    s = Li("background", png)
+    start_ai_game(s)
+    play_move(s, "e2", "e4", "1. e4")
+    s.tick(10, "1. e4 confirmed", frames=1)
+    s.tap(SIDE_BTN(G_MENU), "game: Menu", kind="full")
+    s.at("lichess", "hub", "the game goes on behind the menu")
+    s.li("end resign white")                 # Black (Stockfish here) resigns, we win
+    s.tick(10, "it ends behind the menu", frames=1, kind="deep")
+    s.at("lichess-game", "over", "the result comes to the glass")
+    s.tap(GAMEOVER_BTN(OVER_LICHESS), "over: Lichess", kind="full")
+    s.at("lichess", "hub", "back on the menu")
+    check(s.tick(10, "and it stays there", frames=0) is None, "the result is shown once, not again")
+    s.quit()
 
 
 def scenario_errors(png):
@@ -587,6 +609,7 @@ def main():
         scenario_computer(png_dir)
         scenario_invitations(png_dir)
         scenario_friend(png_dir, state_dir)
+        scenario_background(png_dir)
         scenario_errors(png_dir)
     finally:
         shutil.rmtree(state_dir, ignore_errors=True)
