@@ -1,5 +1,9 @@
 # Arrocco — e-ink chess
 
+<p align="center">
+  <img src="docs/media/arrocco-play.gif" width="800" alt="A game on Arrocco's e-paper screen: the menu, a tap on a pawn shows its legal moves, the engine thinks and answers, then a checkmate in four moves">
+</p>
+
 An open e-ink touch chessboard by CollectiCraft: a 7.5" e-paper panel with a touch layer, an ESP32-S3 and a battery, in a thin 3D-printed case that lies flat on the table. Play the built-in engine, play a friend on the same board, solve puzzles offline, or play on Lichess over Wi-Fi.
 
 Arrocco is an open alternative to commercial e-ink chessboards. It is not affiliated with any commercial e-ink chessboard.
@@ -11,6 +15,19 @@ Arrocco is an open alternative to commercial e-ink chessboards. It is not affili
 24 seconds: the parts it is made of, then a game to checkmate on the real firmware screens (captured from the simulator). [Landscape](https://github.com/collecticraft-sudo/arrocco/releases/download/video-aura/arrocco-aura-16x9.mp4) · [vertical, for phones](https://github.com/collecticraft-sudo/arrocco/releases/download/video-aura/arrocco-aura-9x16.mp4).
 A non-commercial project video. Music: "AURA" by Ogryzek, which belongs to its rights holders. Photos: Unsplash (Sasun Bughdaryan, Alexandre Debiève, Jakub Żerdzicki). Fonts: Instrument Serif and Unbounded (SIL Open Font License).
 
+## The screens
+
+| | |
+|---|---|
+| ![The menu](docs/media/screens/menu.png) | ![e2 selected, with dots on e3 and e4](docs/media/screens/select.png) |
+| **The menu.** Two players, the engine, puzzles and Lichess. | **Tap a piece:** a frame, and a dot on every legal move, in one refresh. |
+| ![The engine thinking after 1. e4](docs/media/screens/thinking.png) | ![The queen on h5 selected, its captures ringed](docs/media/screens/mate-select.png) |
+| **The engine answers.** CT800 runs on the board itself, eight levels from Beginner to Expert. | **Captures are ringed**, quiet moves dotted. |
+| ![White wins by checkmate](docs/media/screens/checkmate.png) | ![The sleep screen: Van Gogh's Starry Night](assets/sleep/sleep_art_preview.png) |
+| **Checkmate**, with the move list in the side column. | **Asleep.** Van Gogh's *Starry Night* when no game is on; mid-game the position stays on the glass, and a tap wakes the board straight back into it. |
+
+Every screen here is the real firmware, captured from the Mac simulator, which runs the same code and draws the same 800 × 480 pixels as the board. The pieces are the CollectiCraft set, drawn for this board.
+
 ## Status: first device running
 
 The first board was assembled and brought up on 6 October 2026. On the real hardware:
@@ -18,9 +35,11 @@ The first board was assembled and brought up on 6 October 2026. On the real hard
 - the panel works (full refresh 1.6 s, partial 0.4 s) and shows clean solid black and white;
 - the touch works (GT911, axes right without any correction) and the buzzer sounds;
 - the real firmware runs: menu, two players on the same board, and the CT800 engine;
-- it runs on the LiPo, switched by the driver board's power switch.
+- it runs on the LiPo, switched by the driver board's power switch;
+- it sleeps after five minutes untouched and wakes on a tap, with the radio off unless something needs it;
+- a game survives a power cut: it is saved after every move and offered again as "Resume game".
 
-Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). Next: sleep with wake on touch, resuming a game after a power loss, the puzzle and Lichess screens, the case.
+Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). Next: the puzzle and Lichess screens, the case.
 
 ## Hardware
 
