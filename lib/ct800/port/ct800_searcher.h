@@ -110,8 +110,14 @@ class Searcher {
   // Asks a running think() to stop. Safe from another task or thread: it stores
   // one flag, which the search polls and which cuts short its throttle sleeps.
   // think() then returns with whatever it had (or false, very early on). The
-  // flag is cleared by the next think().
+  // flag stays raised until clearAbort(), so a think() that starts after it
+  // returns at once.
   void abortSearch() { ct800_glue_abort(); }
+
+  // Lowers the flag of abortSearch(). The thread that runs think() calls it when
+  // it takes a new job, under the same lock as the job: a stop that comes after
+  // that, even before think() has entered the engine, still stops the search.
+  void clearAbort() { ct800_glue_clear_abort(); }
 
   // True between the moment think() enters the engine and the moment it leaves.
   bool thinking() const { return ct800_glue_busy() != 0; }

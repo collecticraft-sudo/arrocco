@@ -4,7 +4,9 @@
 // The search is C code that stops only when it sees a flag, so abort() cannot kill it:
 // it raises the flag AND bumps a generation counter. The task finishes whenever the
 // engine lets it and then drops its answer, because the generation has moved on. That
-// is what makes Undo, New game and Menu safe to press while it is thinking.
+// is what makes Undo, New game and Menu safe to press while it is thinking. The task
+// lowers the flag when it takes a job, under the mutex, so a stop that comes before the
+// search has even entered the engine still stops it.
 //
 // Everything the task reads is copied under the mutex before the search starts, so the
 // UI task may go on touching its own copy of the position while the search runs.
@@ -31,12 +33,27 @@ namespace {
 // Every level is capped at 20 plies (engine.h), so 48 KB keeps a margin of about 9 KB.
 constexpr uint32_t kTaskStack = 48u * 1024u;
 constexpr BaseType_t kTaskCore = 0;            // core 1 runs Arduino's loop task, the panel and touch
-// Idle priority on purpose: at any higher priority a search with no node-rate ceiling
-// would starve IDLE0 and the task watchdog would fire after five seconds. At the idle
-// priority the two round-robin, IDLE0 yields immediately, and the watchdog is fed.
-constexpr UBaseType_t kTaskPriority = tskIDLE_PRIORITY;
+// One step above idle. At the idle priority the search shared core 0 tick by tick with
+// IDLE0, which never yields (configIDLE_SHOULD_YIELD is 0 in this core): half of every
+// move's time went to an idle loop. Up here the search would starve IDLE0 instead, and
+// IDLE0 feeds the 5 s task watchdog, so engineNowMs() gives it one tick every
+// kYieldEveryMs. The network tasks (priority 2, net_http.cpp) still come first.
+constexpr UBaseType_t kTaskPriority = tskIDLE_PRIORITY + 1;
+constexpr int64_t kYieldEveryMs = 100;
 
-int64_t engineNowMs() { return esp_timer_get_time() / 1000; }
+TaskHandle_t s_searchTask = nullptr;   // set once the task exists; read by engineNowMs()
+int64_t s_lastYieldMs = 0;             // written by the search task only
+
+// The search reads this clock about once a millisecond (Time_Check_Throttle in CT800's
+// search.c), which makes it the place to hand IDLE0 its tick. The same clock is read at
+// boot from setup(), where it must not block: only the search task yields.
+int64_t engineNowMs() {
+  const int64_t now = esp_timer_get_time() / 1000;
+  if (now - s_lastYieldMs < kYieldEveryMs || xTaskGetCurrentTaskHandle() != s_searchTask) return now;
+  vTaskDelay(1);
+  s_lastYieldMs = esp_timer_get_time() / 1000;
+  return s_lastYieldMs;
+}
 
 void engineSleepMs(int32_t ms) {
   if (ms <= 0) return;
@@ -92,6 +109,7 @@ class Esp32Engine final : public arrocco::Engine {
       snprintf(info_, sizeof info_, "search task could not be created");
       return false;
     }
+    s_searchTask = task_;   // the task is blocked on job_ until the first start()
     return true;
   }
 
@@ -195,6 +213,7 @@ class Esp32Engine final : public arrocco::Engine {
         continue;
       }
       jobPending_ = false;
+      searcher_.clearAbort();      // under the mutex: any stop from now on is for this job
       generation = generation_;
       level = arrocco::kEngineLevels[level_];
       timeMs = timeMs_ != 0 ? timeMs_ : level.timeMs;

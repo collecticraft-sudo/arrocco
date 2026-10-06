@@ -3,8 +3,9 @@
 //
 // The Arduino loop task has 8 KB of stack and the search needs far more, so the engine
 // gets a task of its own: 48 KB of stack, pinned to core 0 (the UI, the panel and the
-// touch controller live on core 1), at the idle priority so that the core's IDLE0 task
-// keeps running and keeps feeding the 5 s task watchdog.
+// touch controller live on core 1), one step above the idle priority. Every 100 ms of
+// search it blocks for one tick, so that the core's IDLE0 task still runs and keeps
+// feeding the 5 s task watchdog (esp32_engine.cpp, kTaskPriority).
 //
 // The transposition tables are claimed ONCE, in begin(): internal RAM first, PSRAM if
 // they do not fit — which, at about 640 KB, is what always happens on this board. No

@@ -81,9 +81,18 @@ int ct800_glue_think(int32_t time_ms, int max_depth, int cpu_speed, uint64_t max
                      int64_t *spent_ms);
 
 /* Asks the running search to stop. Safe from another thread: it only stores a
-   flag that the search polls (and that wakes its throttle sleeps). The flag is
-   cleared at the start of every think(). */
+   flag that the search polls (and that wakes its throttle sleeps). The flag
+   stays raised until ct800_glue_clear_abort(): a think() that starts while it
+   is raised returns at its first poll. */
 void ct800_glue_abort(void);
+
+/* Lowers the flag of ct800_glue_abort(). A caller that hands jobs to a search
+   thread calls it when that thread takes a job, under the lock that guards the
+   job: a stop asked after that moment then stops the search even if it comes
+   before think() has entered the engine. (think() used to clear the flag
+   itself, and a stop that fell between taking the job and think() was lost:
+   the search ran its whole time for an answer nobody wanted.) */
+void ct800_glue_clear_abort(void);
 
 /* Non-zero while a think() call is inside the engine. */
 int ct800_glue_busy(void);

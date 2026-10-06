@@ -120,6 +120,7 @@ class HostEngine final : public arrocco::Engine {
         wake_.wait(lock, [this] { return quit_ || jobPending_; });
         if (quit_) return;
         jobPending_ = false;
+        searcher_.clearAbort();   // under the lock: any stop from now on is for this job
         generation = generation_;
         memcpy(fen, fen_, sizeof fen);
         memcpy(moves, moves_, sizeof moves);

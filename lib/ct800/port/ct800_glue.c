@@ -1136,9 +1136,10 @@ enum E_POS_VALID Play_Read_FEN_Position(char *fen_line)
 static int64_t (*g_now_ms)(void);
 static void (*g_sleep_ms)(int32_t);
 
-/* Written by ct800_glue_abort() from any thread, polled by the search.
-   A plain volatile int is enough: the only transition that matters is 0 -> 1,
-   and a search that notices it one poll late simply stops one poll later. */
+/* Raised by ct800_glue_abort() from any thread, polled by the search, lowered
+   by ct800_glue_clear_abort() when the search thread takes its next job (never
+   while a search runs). A plain volatile int is enough: a search that notices
+   the 0 -> 1 one poll late simply stops one poll later. */
 static volatile unsigned int g_abort;
 static volatile unsigned int g_busy;
 
@@ -1443,7 +1444,8 @@ int ct800_glue_think(int32_t time_ms, int max_depth, int cpu_speed, uint64_t max
     pmove.u = MV_NO_MOVE_MASK;
     amove.u = MV_NO_MOVE_MASK;
 
-    g_abort = 0;
+    /* g_abort is left as it is: a stop asked since the caller took this job
+       must stop this search (ct800_glue_clear_abort() in the header). */
     g_busy = 1;
     res = Search_Get_Best_Move(&amove, pmove, (int64_t)time_ms, (int)DEFAULT_MOVE_OVERHEAD,
                                /*exact_time=*/1, max_depth, cpu_speed,
@@ -1471,6 +1473,11 @@ int ct800_glue_think(int32_t time_ms, int max_depth, int cpu_speed, uint64_t max
 void ct800_glue_abort(void)
 {
     g_abort = 1;
+}
+
+void ct800_glue_clear_abort(void)
+{
+    g_abort = 0;
 }
 
 int ct800_glue_busy(void)

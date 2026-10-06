@@ -239,6 +239,37 @@ void testAbort() {
   check(took >= 0 && took < 400, "abort: think() came back %lld ms later (budget ~200 ms)",
         static_cast<long long>(took));
   check(took < 30000, "abort: it did not simply use up its 30 s");
+  g_searcher.clearAbort();   // the flag stays up until cleared: the next tests search again
+}
+
+// A stop that lands after the search thread took the job but before think() entered the
+// engine. think() used to lower the flag itself and so lost it: the search then ran its
+// whole time for a position nobody wanted any more.
+void testAbortBeforeThink() {
+  const char* kFen = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4";
+  ct800::Limits limits = limitsFor(7, 30000);
+  limits.useBook = false;
+  char uci[6];
+
+  g_searcher.clearAbort();                       // the job is taken
+  g_searcher.abortSearch();                      // the stop comes before think()
+  check(g_searcher.setPosition(kFen, ""), "early abort: the engine took the position");
+  const int64_t t0 = nowMs();
+  g_searcher.think(limits, uci);
+  const int64_t took = nowMs() - t0;
+  printf("      stop before think() -> think() returned in %lld ms\n", static_cast<long long>(took));
+  check(took < 400, "early abort: think() came back in %lld ms, not after its 30 s",
+        static_cast<long long>(took));
+
+  g_searcher.clearAbort();                       // the next job: the old stop must not leak
+  check(g_searcher.setPosition(kFen, ""), "early abort: the engine took the position again");
+  limits.timeMs = 300;
+  const int64_t t1 = nowMs();
+  const bool found = g_searcher.think(limits, uci);
+  const int64_t took2 = nowMs() - t1;
+  check(found, "early abort: after clearAbort() the next search finds a move (%s)", uci);
+  check(took2 >= 200, "early abort: and it uses its time (%lld ms of 300)",
+        static_cast<long long>(took2));
 }
 
 void testStrongMoveAndRepeat() {
@@ -427,6 +458,7 @@ int main() {
   testStrongMoveAndRepeat();
   testNodeRate();
   testAbort();
+  testAbortBeforeThink();
   testCastlingAndEnPassantSurvive();
   testNoMoveWhenTheGameIsOver();
   testPromotionAndTakeBack();
