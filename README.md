@@ -10,9 +10,9 @@ Arrocco is an open alternative to commercial e-ink chessboards. It is not affili
 
 ## Video
 
-[![Arrocco: what it is made of, and a game to checkmate](docs/media/arrocco-video.jpg)](https://github.com/collecticraft-sudo/arrocco/releases/download/video-aura/arrocco-aura-16x9.mp4)
+![Arrocco: what it is made of, and a game to checkmate](docs/media/arrocco-video.jpg)
 
-24 seconds: the parts it is made of, then a game to checkmate on the real firmware screens (captured from the simulator). [Landscape](https://github.com/collecticraft-sudo/arrocco/releases/download/video-aura/arrocco-aura-16x9.mp4) · [vertical, for phones](https://github.com/collecticraft-sudo/arrocco/releases/download/video-aura/arrocco-aura-9x16.mp4).
+24 seconds: the parts it is made of, then a game to checkmate on the real firmware screens (captured from the simulator).
 A non-commercial project video. Music: "AURA" by Ogryzek, which belongs to its rights holders. Photos: Unsplash (Sasun Bughdaryan, Alexandre Debiève, Jakub Żerdzicki). Fonts: Instrument Serif and Unbounded (SIL Open Font License).
 
 ## The screens
