@@ -4,16 +4,23 @@ An open e-ink touch chessboard by CollectiCraft: a 7.5" e-paper panel with a tou
 
 Arrocco is an open alternative to commercial e-ink chessboards. It is not affiliated with any commercial e-ink chessboard.
 
-## Status: pre-hardware
+## Video
 
-The parts are ordered. **Nothing has been tested on a device yet.**
+[![Arrocco: what it is made of, and a game to checkmate](docs/media/arrocco-video.jpg)](https://github.com/collecticraft-sudo/arrocco/releases/download/video-aura/arrocco-aura-16x9.mp4)
 
-What works today, on a Mac:
+24 seconds: the parts it is made of, then a game to checkmate on the real firmware screens (captured from the simulator). [Landscape](https://github.com/collecticraft-sudo/arrocco/releases/download/video-aura/arrocco-aura-16x9.mp4) · [vertical, for phones](https://github.com/collecticraft-sudo/arrocco/releases/download/video-aura/arrocco-aura-9x16.mp4).
+A non-commercial project video. Music: "AURA" by Ogryzek, which belongs to its rights holders. Photos: Unsplash (Sasun Bughdaryan, Alexandre Debiève, Jakub Żerdzicki). Fonts: Instrument Serif and Unbounded (SIL Open Font License).
 
-- The chess rules library passes its perft tests (move generation checked against known node counts).
-- The Mac simulator runs the portable code and shows the 800 × 480 screen pixel for pixel in a browser.
+## Status: first device running
 
-Everything about the hardware below comes from datasheets, schematics and library sources. The first job when the parts arrive is the hardware-validation firmware.
+The first board was assembled and brought up on 6 October 2026. On the real hardware:
+
+- the panel works (full refresh 1.6 s, partial 0.4 s) and shows clean solid black and white;
+- the touch works (GT911, axes right without any correction) and the buzzer sounds;
+- the real firmware runs: menu, two players on the same board, and the CT800 engine;
+- it runs on the LiPo, switched by the driver board's power switch.
+
+Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). Next: sleep with wake on touch, resuming a game after a power loss, the puzzle and Lichess screens, the case.
 
 ## Hardware
 
@@ -37,7 +44,7 @@ Through-hole soldering only. Wiring and pin map: [docs/wiring.md](docs/wiring.md
 |---|---|
 | `lib/arrocco/` | Portable core: chess rules and user interface. The same code runs on the device and on a Mac. |
 | `src/hwtest/` | Hardware-validation firmware. It checks the display, the touch and the wiring by itself and reports on the screen. |
-| `src/app/` | The real firmware. Comes later. |
+| `src/app/` | The device firmware: menu and games, the CT800 engine task, Wi-Fi and the Lichess client. |
 | `sim/` | Mac simulator. Run `sim/run.sh`. |
 | `test/chess/` | Native tests for the rules library. Run `make -C test/chess test`. |
 | `assets/pieces/` | SVG sources for the CollectiCraft 1-bit piece set, with a template. |
@@ -62,7 +69,7 @@ sim/run.sh                  # build, start the local server, open the page
 
 ## Roadmap
 
-1. **Hardware validation.** The `hwtest` firmware finds wiring faults by itself and names them on the screen.
+1. **Hardware validation.** Done on the first device (6 October 2026): the `hwtest` firmware finds wiring faults by itself and names them on the screen.
 2. **Rules library.** Done; everything else builds on it.
 3. **Interface and two players** on the same board, with a clock. One screen refresh per event, few full-screen flashes.
 4. **Engine.** CT800 in its own task, speaking UCI. Named levels, from easy ones below 1000 Elo up to club strength.
