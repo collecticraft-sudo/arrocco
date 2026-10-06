@@ -10,9 +10,18 @@
 
 namespace arrocco_sim {
 
+namespace {
+arrocco::ui::ChessApp* g_app = nullptr;
+}  // namespace
+
 arrocco::App* createApp(arrocco::Platform& platform) {
   static arrocco::ui::ChessApp app(platform, hostEngine());
+  g_app = &app;
   return &app;
+}
+
+void prepareWake() {
+  if (g_app != nullptr) g_app->wakeIntoGame();
 }
 
 const char* appName() { return "arrocco"; }

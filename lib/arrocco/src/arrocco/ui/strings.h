@@ -117,4 +117,49 @@ constexpr char kSleepTapToWake[] = "Tap to wake";
 constexpr char kSleepNote[] = "Asleep. Tap to wake.";             // when the build has no picture
 constexpr char kSleepArtCredit[] = "Van Gogh, The Starry Night, 1889";  // names sleep_art.h
 
+// Puzzles: the level picker (the first visit, and the "Level" button)
+constexpr char kPuzzleTitle[] = "Puzzles";
+constexpr char kPuzzlePickFirst[] = "How well do you play? The level then follows your results";
+constexpr char kPuzzlePickAgainFmt[] = "Your rating: %d after %d puzzles. A level starts it again";
+constexpr char kPuzzleLevel1[] = "Beginner";
+constexpr char kPuzzleLevel2[] = "Casual player";
+constexpr char kPuzzleLevel3[] = "Club player";
+constexpr char kPuzzleLevel4[] = "Strong club player";
+constexpr char kPuzzleLevelNoteFmt[] = "start at %d";          // under each level's name
+constexpr char kPuzzleCredit[] = "Puzzles from the Lichess puzzle database, CC0";
+
+// Puzzles: the board's side column
+constexpr char kPuzzleNew[] = "New puzzle";                     // until the opponent's move
+constexpr char kPuzzleAboutToMoveFmt[] = "%s is about to move"; // "Black is about to move"
+constexpr char kPuzzlePlayedFmt[] = "%s played %s";             // "Black played Qxd4"
+constexpr char kPuzzleCorrect[] = "Correct!";
+constexpr char kPuzzleYouPlayedFmt[] = "You played %s";
+constexpr char kPuzzleWrong[] = "Not the move";
+constexpr char kPuzzleTryAgainFmt[] = "%s? Try again";          // "Nf3? Try again"
+constexpr char kPuzzleHintLine[] = "Hint: move this piece";
+constexpr char kPuzzleSolutionHead[] = "Solution";
+constexpr char kPuzzleSolutionFmt[] = "%s plays %s";            // "White plays Qxf7+"
+constexpr char kPuzzleSolutionEnd[] = "That was the whole line";
+constexpr char kPuzzleSolved[] = "Solved!";
+constexpr char kPuzzleSolvedPlain[] = "Solved";                 // after a wrong try or with help
+constexpr char kPuzzleSolvedMate[] = "Checkmate!";
+constexpr char kPuzzleSolvedWell[] = "Well played";
+constexpr char kPuzzleSolvedHint[] = "With a hint";
+constexpr char kPuzzleSolvedLate[] = "After a wrong try";
+constexpr char kPuzzleSolvedHelped[] = "With the solution's help";
+constexpr char kPuzzleSolvedPractice[] = "Practice: no rating change";
+constexpr char kPuzzleRatingFmt[] = "Puzzle rating %d";
+constexpr char kPuzzleIdFmt[] = "lichess.org/training/%s";
+constexpr char kPuzzleYourRating[] = "Your rating";
+constexpr char kPuzzleStatsFmt[] = "Solved %d of %d";
+constexpr char kPuzzleStreakFmt[] = ", streak %d";            // from 2 in a row
+constexpr char kPuzzleStatsNone[] = "No puzzle scored yet";
+constexpr char kPuzzleProvisional[] = "Still finding your level";
+constexpr char kButtonHint[] = "Hint";
+constexpr char kButtonSolution[] = "Solution";
+constexpr char kButtonSkip[] = "Skip";
+constexpr char kButtonNextPuzzle[] = "Next";
+constexpr char kButtonRetry[] = "Retry";
+constexpr char kButtonLevel[] = "Level";
+
 }  // namespace arrocco::ui::str

@@ -140,4 +140,24 @@ constexpr uint8_t kPartialsBeforeFullFewer = 32;  // "fewer flashes"
 // 1.2-1.8 s of a Full refresh would come off its time. Ghosting waits for calmer times.
 constexpr uint32_t kNoFullBelowClockMs = 60000;
 
+// ---- puzzles (puzzle_screen.h) ---------------------------------------------------------------
+// The board as in a game; in the side column the headline and the subline on the game's
+// baselines, what the puzzle is between the game's two dividers, the solver's rating under
+// the second one, and the game's button grid.
+constexpr int16_t kPuzzleThemeBaseline = 116;       // "Fork", Bold12
+constexpr int16_t kPuzzleRatingBaseline = 138;      // "Puzzle rating 1534", Sans9
+constexpr int16_t kPuzzleIdBaseline = 156;          // "lichess.org/training/HaiK8", Sans9
+constexpr int16_t kPuzzleYourLabelBaseline = 188;   // "Your rating", Sans9
+constexpr int16_t kPuzzleYourRatingBaseline = 224;  // "1210", Bold18, the last change after it
+constexpr int16_t kPuzzleStatsBaseline = 250;       // "Solved 12 of 20, streak 3", Sans9
+constexpr int16_t kPuzzleNoteBaseline = 272;        // "Still finding your level", Sans9
+// A wrong move: an X on the square it went to, on a white disc so that it reads on a
+// hatched square and over a piece.
+constexpr int16_t kPuzzleCrossHalf = 11;
+constexpr int16_t kPuzzleCrossStroke = 4;
+constexpr int16_t kPuzzleCrossDisc = 18;
+// The opponent's move (the blunder that sets a puzzle up, a reply) appears this long after
+// the refresh that showed the position before it: long enough to see what changes.
+constexpr uint32_t kPuzzleOpponentDelayMs = 700;
+
 }  // namespace arrocco::ui

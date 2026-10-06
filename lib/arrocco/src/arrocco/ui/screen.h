@@ -13,7 +13,7 @@ class Adafruit_GFX;
 
 namespace arrocco::ui {
 
-enum class ScreenId : uint8_t { Menu, ClockPicker, Settings, EngineSetup, Game, GameOver };
+enum class ScreenId : uint8_t { Menu, ClockPicker, Settings, EngineSetup, Game, GameOver, Puzzle };
 
 // Which colour the human takes against the engine. Random is drawn when the game
 // starts, not before: the setup screen keeps saying "drawn at the start" until then.

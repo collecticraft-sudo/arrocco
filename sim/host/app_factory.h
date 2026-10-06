@@ -18,4 +18,9 @@ arrocco::App* createApp(arrocco::Platform& platform);
 // Short identifier shown in the simulator's control strip ("demo", "arrocco", ...).
 const char* appName();
 
+// Call after createApp() and before App::begin(): this start is the wake from a deep sleep
+// that began with a board on the glass (what power::wakeIntoGame() says on the device),
+// so the app goes back to that board instead of its menu. arrocco-sim --wake.
+void prepareWake();
+
 }  // namespace arrocco_sim

@@ -109,7 +109,8 @@ ChessApp::ChessApp(Platform& platform, Engine* engine)
       settings_(ctx_),
       engineSetup_(ctx_),
       game_screen_(ctx_),
-      gameOver_(ctx_) {}
+      gameOver_(ctx_),
+      puzzle_(ctx_) {}
 
 Screen& ChessApp::current() {
   switch (screenId_) {
@@ -118,12 +119,22 @@ Screen& ChessApp::current() {
     case ScreenId::EngineSetup: return engineSetup_;
     case ScreenId::Game:        return game_screen_;
     case ScreenId::GameOver:    return gameOver_;
+    case ScreenId::Puzzle:      return puzzle_;
     default:                    return menu_;
   }
 }
 
 void ChessApp::begin() {
   restoreGame();
+  puzzle_.restore();
+  // The board fell asleep on a puzzle (the progress says its board was the last thing on
+  // the glass): back to it, as to a game. The panel was hibernated: a Full refresh.
+  if (wakeIntoGame_ && puzzle_.wasOnScreen()) {
+    screenId_ = ScreenId::Puzzle;
+    current().enter();
+    present(Refresh::Full);
+    return;
+  }
   if (wakeIntoGame_ && ctx_.gameInProgress()) {
     // The clock stays as it was: the board never goes to sleep while one counts down.
     // The panel was hibernated, so its first refresh is a Full one anyway.
@@ -231,6 +242,7 @@ void ChessApp::present(Refresh kind) {
   lastActivityMs_ = platform_.millis();
   panelOffSent_ = false;
   saveGame();
+  puzzle_.persist(screenId_ == ScreenId::Puzzle);
 }
 
 void ChessApp::onTouch(const TouchEvent& e) {
