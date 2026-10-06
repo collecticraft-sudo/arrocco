@@ -9,11 +9,30 @@
 
 #include <arrocco/platform.h>
 
+#include <string>
+
 namespace arrocco_sim {
+
+class FakeLichess;
+
+// How the app is put together, from the command line.
+struct AppOptions {
+  // Lichess against the pretend one of fake_lichess.h: no network, no account. Without it the
+  // Lichess screens use the proxy in sim/server.py when one is there (ARROCCO_SIM_PROXY, which
+  // server.py sets for its child), and the menu entry stays greyed when there is none.
+  bool fakeLichess = false;
+};
 
 // Returns the application bound to this platform. The object is owned by the factory
 // and lives until the process exits: never delete it. Called exactly once.
-arrocco::App* createApp(arrocco::Platform& platform);
+arrocco::App* createApp(arrocco::Platform& platform, const AppOptions& options);
+
+// The pretend Lichess, for the protocol's "lichess ..." lines; nullptr without --fake-lichess.
+FakeLichess* fakeLichess();
+
+// What the app shows, for "lichess state": ,"screen":"lichess","page":"hub" (to be put inside a
+// JSON object; "page" is the Lichess page, or the online game's mode).
+std::string screenFields();
 
 // Short identifier shown in the simulator's control strip ("demo", "arrocco", ...).
 const char* appName();

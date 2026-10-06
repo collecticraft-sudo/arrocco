@@ -22,7 +22,7 @@ HTTP surface (all on 127.0.0.1 only):
 
   GET  /lichess/status   JSON: whether a token was found, how many streams are open
   POST /lichess/request  "<METHOD> <path>\\n<form body>"  -> the upstream status and body
-  POST /lichess/stream   "<path>"                         -> a stream id
+  POST /lichess/stream   "<path>", or "POST <path>\\n<form>"  -> a stream id
   GET  /lichess/read     ?id=N&max=M&wait=S               -> the bytes that have arrived
   POST /lichess/close    "<id>"
 
@@ -34,6 +34,9 @@ can be reached through it: no chat, no seeks, no account settings.
 
 With --proxy-only the server does the Lichess half alone (no simulator child, no web page):
 that is what test/lichess uses for its live test.
+
+With --fake-lichess the simulator plays against a pretend Lichess of its own
+(sim/host/fake_lichess.h): no network, no account, no token, and this proxy is not used.
 """
 
 import argparse
@@ -81,6 +84,11 @@ ALLOWED_REQUESTS = (
 ALLOWED_STREAMS = (
     re.compile(r"^/api/stream/event$"),
     re.compile(r"^/api/board/game/stream/[A-Za-z0-9]{6,16}$"),
+)
+# One stream is a POST: a challenge to a friend, kept alive until the friend answers (Lichess lets
+# a real-time challenge expire after 20 s otherwise). Nothing else may be POSTed as a stream.
+ALLOWED_POST_STREAMS = (
+    re.compile(r"^/api/challenge/[A-Za-z0-9_-]{2,30}$"),
 )
 
 # Only these lines ever reach the child: the page is the only intended client, but a
@@ -216,11 +224,12 @@ class Hub:
 class SimProcess:
     """Owns the arrocco-sim child: start, feed, restart, and above all stop."""
 
-    def __init__(self, binary, hub, port=DEFAULT_PORT, state_dir=None):
+    def __init__(self, binary, hub, port=DEFAULT_PORT, state_dir=None, fake_lichess=False):
         self.binary = binary
         self.hub = hub
         self.port = port
         self.state_dir = state_dir     # the board's flash; None = a new board at every start
+        self.fake_lichess = fake_lichess
         self.lock = threading.Lock()
         self.proc = None
         self.generation = 0
@@ -240,6 +249,8 @@ class SimProcess:
         command = [self.binary]
         if self.state_dir:
             command += ["--state", self.state_dir]
+        if self.fake_lichess:
+            command += ["--fake-lichess"]
         self.proc = subprocess.Popen(
             command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             start_new_session=True, env=env)
@@ -339,9 +350,11 @@ class LichessStream:
     """One open ndjson stream. A thread reads it line by line (http.client de-chunks) and
     appends to a buffer; the simulator drains that buffer whenever it likes."""
 
-    def __init__(self, stream_id, path, token):
+    def __init__(self, stream_id, path, token, method="GET", form=b""):
         self.id = stream_id
         self.path = path
+        self._method = method
+        self._form = form
         self._token = token
         self._lock = threading.Lock()
         self._ready = threading.Condition(self._lock)
@@ -363,11 +376,15 @@ class LichessStream:
                 if self._closed:
                     return
                 self._connection = connection
-            connection.request("GET", self.path, headers={
+            headers = {
                 "Authorization": "Bearer " + self._token,
                 "Accept": "application/x-ndjson",
                 "User-Agent": "arrocco-sim",
-            })
+            }
+            if self._method == "POST":
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+            connection.request(self._method, self.path,
+                               body=self._form if self._method == "POST" else None, headers=headers)
             response = connection.getresponse()
             if response.status != 200:
                 body = response.read(512)
@@ -454,8 +471,10 @@ class LichessStream:
 class LichessProxy:
     """HTTPS to lichess.org on behalf of the simulator. One request at a time, as Lichess asks."""
 
-    def __init__(self):
-        self.token = load_token()
+    def __init__(self, enabled=True):
+        # With the pretend Lichess (--fake-lichess) the proxy is never used, so the token is not
+        # even read: the simulator then cannot reach lichess.org, by construction.
+        self.token = load_token() if enabled else ""
         self._request_lock = threading.Lock()
         self._streams = {}
         self._streams_lock = threading.Lock()
@@ -473,7 +492,11 @@ class LichessProxy:
         return any(method == m and pattern.match(path) for m, pattern in ALLOWED_REQUESTS)
 
     @staticmethod
-    def stream_allowed(path):
+    def stream_allowed(path, method="GET", form=b""):
+        if method == "POST":
+            # Only a kept-alive challenge: without that flag it would be a plain request.
+            return (any(pattern.match(path) for pattern in ALLOWED_POST_STREAMS)
+                    and b"keepAliveStream=true" in form)
         return any(pattern.match(path) for pattern in ALLOWED_STREAMS)
 
     def request(self, method, path, body):
@@ -506,18 +529,18 @@ class LichessProxy:
                     except Exception:                   # noqa: BLE001
                         pass
 
-    def open_stream(self, path):
+    def open_stream(self, path, method="GET", form=b""):
         """(stream_id, None, 0) or (None, reason, upstream_status). The status is Lichess's own
         and is 0 when we never got that far; the caller passes it on so that a 429 becomes a
         minute of silence instead of a reconnect loop."""
         if not self.token:
             return None, "no Lichess token (ARROCCO_LICHESS_TOKEN or %s)" % TOKEN_FILE, 0
-        if not self.stream_allowed(path):
-            return None, "stream path not allowed by the proxy: %s" % path, 0
+        if not self.stream_allowed(path, method, form):
+            return None, "stream path not allowed by the proxy: %s %s" % (method, path), 0
         with self._streams_lock:
             stream_id = self._next_id
             self._next_id += 1
-            stream = LichessStream(stream_id, path, self.token)
+            stream = LichessStream(stream_id, path, self.token, method, form)
             self._streams[stream_id] = stream
         # A few seconds at most: openStream() is the one call that waits, and it waits only
         # for Lichess's status line, not for any data.
@@ -731,11 +754,15 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(payload)
 
     def _lichess_open(self, body):
+        head, _, form = body.partition(b"\n")
         try:
-            path = body.decode("ascii").strip()
+            line = head.decode("ascii").strip()
         except UnicodeDecodeError:
             return self._reply(400, b"ASCII only\n")
-        stream_id, reason, upstream = self.server.proxy.open_stream(path)
+        method, path = "GET", line
+        if line.startswith("POST "):
+            method, path = "POST", line[5:].strip()
+        stream_id, reason, upstream = self.server.proxy.open_stream(path, method, form)
         if stream_id is None:
             return self._proxy_error(reason, upstream)
         return self._reply(200, b"%d\n" % stream_id)
@@ -806,6 +833,9 @@ def main():
                         help="where the board's flash (the saved game) lives; default sim/build/state")
     parser.add_argument("--no-state", action="store_true",
                         help="no flash: every start, restart included, is a new board")
+    parser.add_argument("--fake-lichess", action="store_true",
+                        help="Lichess screens against a pretend Lichess: no network, no account, "
+                             "and the token is not read")
     args = parser.parse_args()
 
     if not args.proxy_only:
@@ -829,9 +859,9 @@ def main():
             os.makedirs(state_dir, exist_ok=True)
         except OSError as error:
             sys.exit("server.py: cannot create the state directory %s (%s)" % (state_dir, error))
-    sim = None if args.proxy_only else SimProcess(args.binary, hub, args.port, state_dir)
+    sim = None if args.proxy_only else SimProcess(args.binary, hub, args.port, state_dir, args.fake_lichess)
     httpd.hub, httpd.sim, httpd.verbose = hub, sim, args.verbose
-    httpd.proxy = LichessProxy()
+    httpd.proxy = LichessProxy(enabled=not args.fake_lichess)
 
     stop = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):

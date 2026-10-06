@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Arrocco simulator — native build of arrocco-sim. Run it through sim/build.sh, which
-# creates the build/gfx symlink this file relies on. Every path here is relative to
+# creates the build/gfx and build/qrcodegen symlinks this file relies on. Every path here is relative to
 # sim/ on purpose (make breaks on spaces in absolute paths).
 #
 #   make            build build/arrocco-sim
@@ -13,6 +13,7 @@ CC       ?= clang
 BUILD    := build
 OBJ      := $(BUILD)/obj
 GFX      := $(BUILD)/gfx
+QR       := $(BUILD)/qrcodegen
 CORE_DIR := ../lib/arrocco/src
 CT800    := ../lib/ct800
 CT800_UP := $(CT800)/upstream/application-uci
@@ -25,7 +26,7 @@ CORE     ?= 1
 # Arduino.h. No ESP32/ESP8266/__AVR__ define: GFX then takes its generic code path,
 # which is the one the ESP32 uses too (plain pointers, no PROGMEM tricks).
 BASE_FLAGS := -std=c++17 -O2 -g -fno-exceptions -fno-rtti -DARDUINO=10819 -DARROCCO_SIM=1
-INCLUDES   := -Iarduino_shim -Ihost -I$(CORE_DIR) -I$(CT800)/port -isystem $(GFX)
+INCLUDES   := -Iarduino_shim -Ihost -I$(CORE_DIR) -I$(CT800)/port -isystem $(GFX) -isystem $(QR)/src
 # The CT800 engine is C99, and upstream asks for these three. They are not ours to
 # change: lib/ct800/upstream stays byte-identical to what was shipped.
 C_FLAGS    := -std=c99 -O2 -g -fno-strict-aliasing -fno-strict-overflow -fno-common
@@ -53,7 +54,8 @@ HOST_OBJS := $(patsubst host/%.cpp,$(OBJ)/host/%.o,$(HOST_SRCS))
 SHIM_OBJS := $(patsubst arduino_shim/%.cpp,$(OBJ)/shim/%.o,$(SHIM_SRCS))
 CORE_OBJS := $(patsubst $(CORE_DIR)/%.cpp,$(OBJ)/core/%.o,$(CORE_SRCS))
 GFX_OBJS  := $(OBJ)/gfx/Adafruit_GFX.o
-OBJS      := $(HOST_OBJS) $(SHIM_OBJS) $(CORE_OBJS) $(GFX_OBJS) $(CT800_OBJS)
+QR_OBJS   := $(OBJ)/qr/qrcodegen.o
+OBJS      := $(HOST_OBJS) $(SHIM_OBJS) $(CORE_OBJS) $(GFX_OBJS) $(QR_OBJS) $(CT800_OBJS)
 
 ifeq ($(V),1)
 Q :=
@@ -67,6 +69,9 @@ all: $(TARGET)
 ifneq ($(MAKECMDGOALS),clean)
 ifeq ($(wildcard $(GFX)/Adafruit_GFX.cpp),)
 $(error $(GFX)/Adafruit_GFX.cpp is missing: build with sim/build.sh, it locates the Adafruit GFX Library that PlatformIO downloaded)
+endif
+ifeq ($(wildcard $(QR)/src/qrcodegen.c),)
+$(error $(QR)/src/qrcodegen.c is missing: build with sim/build.sh, it locates the QR library that PlatformIO downloaded)
 endif
 endif
 
@@ -98,6 +103,12 @@ $(OBJ)/ct800port/%.o: $(CT800)/port/%.c
 	@mkdir -p $(dir $@)
 	@echo "  CC    $<"
 	$(Q)$(CC) $(C_FLAGS) -Wall -Wextra $(C_INCLUDES) -MMD -MP -c $< -o $@
+
+# The QR encoder of the Lichess screens: C99, third party, warnings silenced as for the others.
+$(OBJ)/qr/qrcodegen.o: $(QR)/src/qrcodegen.c
+	@mkdir -p $(dir $@)
+	@echo "  CC    $< (third party, warnings silenced)"
+	$(Q)$(CC) -std=c99 -O2 -g $(THIRD_WARN) -MMD -MP -c $< -o $@
 
 # glcdfont.c is #included by Adafruit_GFX.cpp, so this one object is the whole library
 # as far as the simulator is concerned (canvases, primitives, both font renderers).

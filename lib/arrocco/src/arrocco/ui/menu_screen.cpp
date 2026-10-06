@@ -7,6 +7,7 @@
 #include <Adafruit_GFX.h>
 
 #include "arrocco/ui/layout.h"
+#include "arrocco/ui/lichess_state.h"
 #include "arrocco/ui/strings.h"
 #include "arrocco/ui/text.h"
 
@@ -55,7 +56,8 @@ void MenuScreen::draw(Adafruit_GFX& gfx) {
   drawButton(gfx, menuButtonRect(kSlotEngine), Font::Bold12, str::kMenuEngine, ctx_.engineAvailable(),
              ctx_.engineAvailable() ? nullptr : str::kEngineMissing);
   drawButton(gfx, menuButtonRect(kSlotPuzzles), Font::Bold12, str::kMenuPuzzles, false, str::kComingSoon);
-  drawButton(gfx, menuButtonRect(kSlotLichess), Font::Bold12, str::kMenuLichess, false, str::kComingSoon);
+  drawButton(gfx, menuButtonRect(kSlotLichess), Font::Bold12, str::kMenuLichess, ctx_.lichess != nullptr,
+             ctx_.lichess == nullptr ? str::kComingSoon : (ctx_.lichess->gameInProgress() ? str::kLichessInGame : nullptr));
   drawButton(gfx, menuButtonRect(kSlotSettings), Font::Bold12, str::kMenuSettings);
 
   // Footer: what the platform knows about power, as of this refresh. A board without a
@@ -87,6 +89,9 @@ Action MenuScreen::onTap(int16_t x, int16_t y) {
     case kSlotEngine:
       if (!ctx_.engineAvailable()) return Action::none();
       return Action::go(ScreenId::EngineSetup);
+    case kSlotLichess:
+      if (ctx_.lichess == nullptr) return Action::none();
+      return Action::go(ScreenId::Lichess);
     case kSlotSettings:
       return Action::go(ScreenId::Settings);
     default:

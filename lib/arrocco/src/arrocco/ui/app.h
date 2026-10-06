@@ -24,6 +24,8 @@
 #include "arrocco/platform.h"
 #include "arrocco/ui/game_over_screen.h"
 #include "arrocco/ui/game_screen.h"
+#include "arrocco/ui/lichess_game_screen.h"
+#include "arrocco/ui/lichess_screen.h"
 #include "arrocco/ui/menu_screen.h"
 #include "arrocco/ui/saved_game.h"
 #include "arrocco/ui/screen.h"
@@ -42,6 +44,10 @@ class ChessApp final : public arrocco::App {
   // begin() then does not offer a saved game against the engine.
   void setEngine(Engine* engine) { ctx_.engine = engine; }
 
+  // Attaches Lichess (lichess_state.h): the account, the client and the online game's board.
+  // Same rules as setEngine(): before begin(), it must outlive the app, null greys the entry.
+  void setLichess(LichessState* lichess) { ctx_.lichess = lichess; }
+
   // Call before begin(): a touch woke the board from a sleep that began on the game screen.
   // begin() then goes straight back to the saved game instead of the menu.
   void wakeIntoGame() { wakeIntoGame_ = true; }
@@ -52,12 +58,22 @@ class ChessApp final : public arrocco::App {
 
   // For tests and the simulator's status line.
   ScreenId currentScreen() const { return screenId_; }
+  const LichessScreen& lichessScreen() const { return lichess_; }
+  const LichessGameScreen& lichessGameScreen() const { return lichessGame_; }
   uint8_t partialsSinceFull() const { return partialsSinceFull_; }
   const chess::Game& game() const { return game_; }
   // For the firmware's sleep and touch policy (src/app/main.cpp): no deep sleep while the
   // game clock counts down, and no tap replayed after a refresh while a popup covers the board.
   const GameClock& clock() const { return ctx_.clock; }
   bool gamePopupOpen() const { return game_screen_.popupOpen(); }
+  // The same for whichever board is on the glass, the offline game's or the online one's: the
+  // touch policy replays a tap made during a refresh only when this board did not change under it.
+  bool boardShown() const { return screenId_ == ScreenId::Game || screenId_ == ScreenId::LichessGame; }
+  const chess::Game& boardGame() const;
+  bool boardPopupOpen() const;
+  // A clock is counting down on the glass (offline or online): the app's own refreshes then wait
+  // a moment after a touch, so that they do not land on the second tap of a move.
+  bool clockTicking() const;
 
  private:
   Screen& current();
@@ -78,6 +94,8 @@ class ChessApp final : public arrocco::App {
   EngineSetupScreen engineSetup_;
   GameScreen game_screen_;
   GameOverScreen gameOver_;
+  LichessScreen lichess_;
+  LichessGameScreen lichessGame_;
   ScreenId screenId_ = ScreenId::Menu;
   bool wakeIntoGame_ = false;
 

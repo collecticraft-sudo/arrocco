@@ -56,6 +56,9 @@ class ProxyTransport : public arrocco::lichess::Transport {
   int openStream(const char* path) override;
   int readStream(int id, char* out, int outSize) override;
   void closeStream(int id) override;
+  // The proxy opens POST streams too (only the kept-alive challenge, see sim/server.py).
+  bool supportsPostStreams() const override { return true; }
+  int openPostStream(const char* path, const char* body) override;
   int lastStreamStatus() const override { return streamStatus_; }
   const char* lastError() const override { return error_.c_str(); }
 
@@ -68,6 +71,7 @@ class ProxyTransport : public arrocco::lichess::Transport {
   };
 
   Stream* findStream(int id);
+  int open(const std::string& request);
 
   std::string address_;
   std::string error_;

@@ -287,13 +287,28 @@ ProxyTransport::Stream* ProxyTransport::findStream(int id) {
 int ProxyTransport::openStream(const char* path) {
   streamStatus_ = 0;
   if (path == nullptr) return Transport::kNoStream;
+  return open(path);
+}
+
+// "POST <path>\n<form>" tells the proxy to POST; a bare path is a GET, as before.
+int ProxyTransport::openPostStream(const char* path, const char* body) {
+  streamStatus_ = 0;
+  if (path == nullptr) return Transport::kNoStream;
+  std::string request = "POST ";
+  request += path;
+  request += '\n';
+  if (body != nullptr) request += body;
+  return open(request);
+}
+
+int ProxyTransport::open(const std::string& request) {
   Stream* slot = findStream(-1);
   if (slot == nullptr) {
     error_ = "no free stream slot";
     return Transport::kNoStream;
   }
   std::string error;
-  const Reply reply = talk(address_, "POST", "/lichess/stream", path, error);
+  const Reply reply = talk(address_, "POST", "/lichess/stream", request, error);
   if (!reply.ok) {
     error_ = error;
     return Transport::kNoStream;

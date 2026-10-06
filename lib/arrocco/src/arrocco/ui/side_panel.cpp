@@ -16,11 +16,12 @@ namespace {
 
 using chess::Color;
 
-void drawClockBlock(Adafruit_GFX& gfx, const ClockView& clock) {
+void drawClockBlock(Adafruit_GFX& gfx, const ClockView& clock, const char* const names[2]) {
   if (!clock.shown) return;
   char text[8];
   const int16_t xs[2] = {kSideInnerX, kClockColumn2X};
-  const char* labels[2] = {str::kWhiteLabel, str::kBlackLabel};
+  const char* labels[2] = {names[0] != nullptr ? names[0] : str::kWhiteLabel,
+                           names[1] != nullptr ? names[1] : str::kBlackLabel};
   for (int side = 0; side < 2; ++side) {
     drawText(gfx, Font::Sans9, xs[side], kClockLabelBaseline, labels[side]);
     GameClock::format(clock.seconds[side], text, sizeof text);
@@ -86,7 +87,7 @@ void drawSidePanel(Adafruit_GFX& gfx, const chess::Game& game, const SidePanelVi
   if (view.headline != nullptr) drawText(gfx, Font::Bold18, kSideInnerX, kTurnBaseline, view.headline);
   if (view.subline != nullptr) drawText(gfx, Font::Sans12, kSideInnerX, kLastMoveBaseline, view.subline);
   gfx.drawFastHLine(kSideInnerX, kDivider1Y, kSideInnerW, kBlack);
-  drawClockBlock(gfx, view.clock);
+  drawClockBlock(gfx, view.clock, view.clockLabels);
   gfx.drawFastHLine(kSideInnerX, kDivider2Y, kSideInnerW, kBlack);
   drawMoveList(gfx, game);
   drawMaterial(gfx, game);

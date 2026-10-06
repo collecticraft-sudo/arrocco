@@ -15,7 +15,10 @@
 #include <mutex>
 #include <thread>
 
+#include <string>
+
 #include "app_factory.h"
+#include "fake_lichess.h"
 #include "protocol.h"
 #include "sim_platform.h"
 
@@ -214,6 +217,25 @@ void handleLine(Session& s, const InputLine& input) {
     s.platform.resendLastFrame();
     return;
   }
+  if (strncmp(text, "lichess ", 8) == 0) {
+    arrocco_sim::FakeLichess* fake = arrocco_sim::fakeLichess();
+    if (fake == nullptr) {
+      s.out.error("no pretend Lichess: start with --fake-lichess", text);
+      return;
+    }
+    std::string error;
+    fake->command(text, error);
+    if (!error.empty()) {
+      s.out.error(error.c_str(), text);
+      return;
+    }
+    if (strcmp(text, "lichess state") == 0) {
+      std::string json = fake->stateJson();
+      json.insert(json.size() - 1, arrocco_sim::screenFields());   // before the closing brace
+      s.out.raw(json.c_str());
+    }
+    return;
+  }
   s.out.error("unknown command", text);
 }
 
@@ -222,20 +244,25 @@ void handleLine(Session& s, const InputLine& input) {
 int main(int argc, char** argv) {
   bool virtualTime = false;
   const char* stateDir = nullptr;
+  arrocco_sim::AppOptions options;
   for (int i = 1; i < argc; ++i) {
     if (strcmp(argv[i], "--virtual-time") == 0) {
       virtualTime = true;
+    } else if (strcmp(argv[i], "--fake-lichess") == 0) {
+      options.fakeLichess = true;
     } else if (strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
       stateDir = argv[++i];
     } else {
       fprintf(stderr,
-              "usage: arrocco-sim [--virtual-time] [--state DIR]\n"
+              "usage: arrocco-sim [--virtual-time] [--state DIR] [--fake-lichess]\n"
               "Runs the Arrocco app on a simulated 800x480 e-ink panel and speaks a line\n"
               "protocol on stdin/stdout (see sim/host/protocol.h). Normally started by\n"
               "sim/server.py; sim/run.sh does everything.\n"
               "  --state DIR   the board's flash (the saved game) lives in DIR, so that\n"
               "                ending this process is a power cut and the next start\n"
-              "                offers \"Resume game\". Without it every start is a new board.\n");
+              "                offers \"Resume game\". Without it every start is a new board.\n"
+              "  --fake-lichess  Lichess against a pretend one inside the simulator: no network,\n"
+              "                no account (sim/host/fake_lichess.h; \"lichess ...\" lines drive it).\n");
       return strcmp(argv[i], "--help") == 0 ? 0 : 2;
     }
   }
@@ -251,7 +278,7 @@ int main(int argc, char** argv) {
     fprintf(stderr, "arrocco-sim: cannot keep the board's flash in '%s' (not a usable directory)\n", stateDir);
     return 2;
   }
-  arrocco::App* app = arrocco_sim::createApp(platform);
+  arrocco::App* app = arrocco_sim::createApp(platform, options);
   if (!app) {
     fprintf(stderr, "arrocco-sim: createApp() returned no app\n");
     return 1;

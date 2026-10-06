@@ -7,6 +7,7 @@
 #include <Adafruit_GFX.h>
 
 #include "arrocco/ui/layout.h"
+#include "arrocco/ui/lichess_state.h"
 
 namespace arrocco::ui {
 
@@ -109,7 +110,9 @@ ChessApp::ChessApp(Platform& platform, Engine* engine)
       settings_(ctx_),
       engineSetup_(ctx_),
       game_screen_(ctx_),
-      gameOver_(ctx_) {}
+      gameOver_(ctx_),
+      lichess_(ctx_),
+      lichessGame_(ctx_) {}
 
 Screen& ChessApp::current() {
   switch (screenId_) {
@@ -118,8 +121,23 @@ Screen& ChessApp::current() {
     case ScreenId::EngineSetup: return engineSetup_;
     case ScreenId::Game:        return game_screen_;
     case ScreenId::GameOver:    return gameOver_;
+    case ScreenId::Lichess:     return lichess_;
+    case ScreenId::LichessGame: return lichessGame_;
     default:                    return menu_;
   }
+}
+
+const chess::Game& ChessApp::boardGame() const {
+  return screenId_ == ScreenId::LichessGame && ctx_.lichess != nullptr ? ctx_.lichess->game : game_;
+}
+
+bool ChessApp::boardPopupOpen() const {
+  return screenId_ == ScreenId::LichessGame ? lichessGame_.popupOpen() : game_screen_.popupOpen();
+}
+
+bool ChessApp::clockTicking() const {
+  if (screenId_ == ScreenId::LichessGame) return lichessGame_.clockTicking();
+  return ctx_.clock.enabled() && ctx_.clock.running();
 }
 
 void ChessApp::begin() {
@@ -257,6 +275,9 @@ void ChessApp::onTouch(const TouchEvent& e) {
 
 void ChessApp::tick() {
   const uint32_t now = platform_.millis();
+  // The network first, whatever the screen and even under a finger: it never draws, and a game
+  // left running behind the menu has to keep following the server.
+  if (ctx_.lichess != nullptr) ctx_.lichess->poll();
   // Never start a refresh under a finger: it would swallow the tap. A finger that never
   // lifts (a missed Up from the touch controller) must not freeze the clock forever.
   if (touchDown_) {

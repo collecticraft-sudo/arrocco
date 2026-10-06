@@ -13,7 +13,9 @@ class Adafruit_GFX;
 
 namespace arrocco::ui {
 
-enum class ScreenId : uint8_t { Menu, ClockPicker, Settings, EngineSetup, Game, GameOver };
+enum class ScreenId : uint8_t { Menu, ClockPicker, Settings, EngineSetup, Game, GameOver, Lichess, LichessGame };
+
+class LichessState;   // lichess_state.h
 
 // Which colour the human takes against the engine. Random is drawn when the game
 // starts, not before: the setup screen keeps saying "drawn at the start" until then.
@@ -71,6 +73,7 @@ struct Context {
   Platform& platform;
   chess::Game& game;
   Engine* engine;              // nullptr in a build without one: the menu entry stays greyed
+  LichessState* lichess = nullptr;  // nullptr: no Lichess in this build, the menu entry stays greyed
   Settings settings;
   GameClock clock;
   bool flipped = false;        // orientation of the game being played
