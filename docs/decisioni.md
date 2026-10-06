@@ -18,7 +18,7 @@ Nome pubblico: **Arrocco — e-ink chess**, by CollectiCraft. Mai "Atlas" né "r
 - Pannello Good Display GDEY075T7-T01 (800×480, UC8179, touch GT911), Seeed ePaper Driver Board 114993558, XIAO ESP32-S3 Plus, LiPo 606090 4000 mAh, buzzer KY-006.
 - Uso **orizzontale da tavolo**: scacchiera a sinistra, colonna laterale a destra.
 - Scocca **sottile con un "mento"**: l'elettronica (12–15 mm con il XIAO montato) sta in una fascia accanto al display, dietro il pannello solo la batteria da 6 mm. La USB-C esce dal bordo del mento.
-- Risveglio **col tocco**; l'interruttore della driver board è lo spento vero.
+- Risveglio **col tocco**; l'interruttore della driver board è lo spento vero. Come funziona il sonno: sezione "Batteria" qui sotto.
 - Percentuale batteria: **MAX17048** I2C (0x36) sullo stesso bus del touch, celle ai pad BAT +/− sul retro della driver board.
 - FTS02 solo al banco. Nella scocca: breakout FPC 6 pin passo 0,5 mm + due pull-up da 4,7 kΩ su SDA e SCL (+ 10 kΩ su RST consigliato).
 - Sulla driver board vanno saldati due header 1×7 nei fori CN1/CN2 (meglio a 90° o fili diretti, per lo spessore).
@@ -41,6 +41,20 @@ Nome pubblico: **Arrocco — e-ink chess**, by CollectiCraft. Mai "Atlas" né "r
 `SPI.begin(7, -1, 9, -1)`: il display non ha MISO e GPIO8 è del touch. I2C a 100 kHz finché non ci sono pull-up da 4,7 kΩ e fili corti.
 
 Collegamento FTS02 (pannello 7,5" nella presa TP-FPC2/P7, flat inserito **girato**): header P10 `A0`=INT, `A3`=RST, `A4`=SDA, `A5`=SCL; header P11 `3.3V` e `GND`. Mai il pin `5V` di P11, mai i pin serigrafati `SDA`/`SCL` di P8.
+
+## Batteria (firmware `arrocco` 0.2)
+- **Deep sleep dopo 5 minuti** senza tocchi né comandi seriali (`cfg::kSleepAfterIdleMs` in `src/common/config.h`), **solo se non gira niente**: motore che pensa, orologio di partita che corre, rete accesa, dito sul vetro. Con l'orologio fermo o senza orologio una partita in corso può dormire: salvarla e riproporla al risveglio è compito dell'app, non del sonno.
+- Prima di dormire: **una schermata del sonno** (il quadro `lib/arrocco/src/arrocco/ui/sleep_art.h` con l'etichetta "Tap to wake" in basso a destra, refresh completo; senza quadro nel build una nota "Asleep. Tap to wake." sopra la colonna laterale, refresh parziale), poi pannello in hibernate.
+- Nel sonno il **GT911 resta acceso** e scansiona (dopo pochi secondi in green mode, ~3,3 mA da datasheet: è lui il consumo maggiore). RST tenuto alto (GPIO43 è un pad digitale: `gpio_hold_en` + `gpio_deep_sleep_hold_en`), INT con la resistenza verso l'alto del dominio RTC, sveglia **ext0 su INT basso**. Il log di avvio della ROM viene spento prima del sonno: passerebbe su GPIO43, cioè su RST.
+- **Il risveglio è un riavvio**, senza i 2 s di attesa del monitor seriale e **senza reset del GT911**: il chip non si è mai spento, e un reset con il dito ancora sul vetro gli farebbe ricalibrare la base col dito sopra. Il tocco che sveglia non vale come tocco sulla schermata nuova.
+- Un tocco mentre la schermata del sonno si disegna sveglia la scheda subito (il rapporto non letto tiene INT in movimento).
+- **WiFi spento di default.** La radio si accende solo quando un lavoro di rete la chiede (richieste, stream, login OAuth, `wifi-on`) e si spegne 2 minuti dopo l'ultimo. Il portale di configurazione si apre **solo a richiesta** (`wifi-portal`, `wifi-forget`, in futuro una voce di menu) e si chiude da solo dopo 5 minuti senza pagine richieste. La porta 80 è aperta solo col portale o mentre un login OAuth torna indietro, e il login si abbandona dopo 10 minuti. Niente più portale riaperto da solo dopo quattro tentativi falliti. Dettagli: `rete.md`.
+
+## Touch
+- La configurazione di fabbrica del GT911 (v65, `Module_Switch1 0x3D`) resta quella: **il firmware non la scrive mai da solo**. Il problema "devo premere forte" si prova a risolvere abbassando `Screen_Touch_Level`/`Screen_Leave_Level` **a mano, dal monitor seriale** (`touch-cfg`, `touch-ladder`, `touch-level … yes`, `touch-restore yes`): il chip conserva quello che riceve nella sua flash, quindi prima della prima scrittura il blocco di fabbrica viene copiato in NVS e stampato. Mai sotto la metà del valore di fabbrica.
+- Un tocco fatto **mentre lo schermo si aggiorna** si scarta, tranne quando la scacchiera sotto il dito è rimasta quella che l'utente vedeva: ridisegno dell'orologio (o della batteria) e segni di selezione dopo un tocco su una casella ("pezzo, poi destinazione"). Allora il tocco arriva all'app appena il refresh finisce. Deve sembrare un dito: almeno due rapporti, fermo, un dito solo (il refresh dell'e-paper fa rumore proprio sotto il touch). Regole in `src/app/touch_policy.h`.
+- In una partita con l'orologio, i refresh dell'app (orologio, mossa del motore) aspettano 0,7 s dopo un tocco, al massimo 1,5 s: così non cadono sul secondo tocco.
+- Il GT911 si legge quando INT si muove (ogni rapporto lo fa pulsare), più una lettura ogni 100 ms di scorta: niente più 100 letture al secondo a vetro vuoto.
 
 ## Schermo e interfaccia
 - Caselle da **56 px** con coordinate a–h e 1–8: scacchiera 448 px a partire da x=16, y=16; colonna laterale da x=480 a 799. Tutto allineato a multipli di 8.

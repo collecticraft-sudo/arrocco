@@ -118,6 +118,16 @@ constexpr int16_t kNewGameBoxW = 416;
 constexpr int16_t kNewGameBoxH = 184;
 constexpr int16_t kNewGameBoxY = 144;
 
+// ---- sleep screen (sleep_screen.h) -----------------------------------------------------------
+// The picture fills the screen; its label sits in the bottom-right corner, where the
+// default picture has its darkest part (the hills), on white with a double frame.
+constexpr Rect kSleepLabelBox{472, 392, 312, 72};  // the credit line is 271 px in Sans9
+constexpr int16_t kSleepLabelLine1 = 26;   // "Tap to wake", centre below the box top
+constexpr int16_t kSleepLabelLine2 = 52;   // the picture's credit
+// No picture in the build: a note over the first two lines of the side column, which on
+// the game screen is the headline and the last move, and on the menus is empty.
+constexpr Rect kSleepNoteBox{496, 16, 288, 64};
+
 // ---- behaviour ---------------------------------------------------------------------------
 constexpr int16_t kTapSlop = 16;                  // Up this close to Down still counts as a tap
 constexpr uint32_t kPanelOffAfterMs = 3000;       // idle time before dropping the high voltage

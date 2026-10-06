@@ -30,6 +30,7 @@ class GameScreen final : public Screen {
   void draw(Adafruit_GFX& gfx) override;
   Action onTap(int16_t x, int16_t y) override;
   Action onTick(uint32_t now) override;
+  bool popupOpen() const { return mode_ != Mode::Play; }  // promotion or resign/draw
 
  private:
   enum class Mode : uint8_t { Play, Promotion, Confirm, ConfirmNewGame };

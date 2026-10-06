@@ -112,4 +112,9 @@ constexpr char kByTimeout[] = "Time out";
 constexpr char kByAgreement[] = "Agreement";
 constexpr char kGameOverReview[] = "Review";
 
+// Sleep screen: the board is in deep sleep and any touch wakes it (sleep_screen.h)
+constexpr char kSleepTapToWake[] = "Tap to wake";
+constexpr char kSleepNote[] = "Asleep. Tap to wake.";             // when the build has no picture
+constexpr char kSleepArtCredit[] = "Van Gogh, The Starry Night, 1889";  // names sleep_art.h
+
 }  // namespace arrocco::ui::str

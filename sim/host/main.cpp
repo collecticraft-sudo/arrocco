@@ -82,11 +82,14 @@ private:
   bool closed_ = false;
 };
 
-// Decides which touch samples the App gets to see. The GT911 is not polled while the
-// panel refreshes, so a finger that lands during a refresh never existed for the
-// firmware: the whole gesture (down, moves, up) is dropped. A finger that was already
-// down keeps its Up, delivered once the refresh is over, otherwise the App would be
-// left believing the finger is still there.
+// Decides which touch samples the App gets to see. A finger that lands during a refresh
+// is dropped here, the whole gesture (down, moves, up). A finger that was already down
+// keeps its Up, delivered once the refresh is over, otherwise the App would be left
+// believing the finger is still there.
+// The firmware is a little kinder since 0.2: it polls the GT911 during the refresh and
+// delivers afterwards a tap on the squares when the board under it did not change (a
+// clock repaint, the selection marks after a tap on a square; src/app/touch_policy.h).
+// The simulator keeps the stricter rule: what passes here also passes on the board.
 class TouchGate {
 public:
   enum class Verdict { Deliver, Drop, DropAndCount };

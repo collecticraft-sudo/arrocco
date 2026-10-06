@@ -150,7 +150,9 @@ Resistenze, saldate direttamente sul breakout tra il pad VDD e i tre segnali:
      (pin 5)    (pin 6)    (pin 3)
 ```
 
-INT non ha resistenza.
+INT non ha resistenza: quella verso l'alto la mette l'ESP32 (sveglio, quella del pin; addormentato, quella del dominio RTC). Il GT911 di questo pannello abbassa INT a ogni rapporto e da solo non lo riporta su. Una resistenza esterna da 47 kΩ tra INT e 3V3 è facoltativa: renderebbe il risveglio indipendente da quella interna.
+
+Nel sonno il firmware tiene RST alto col *hold* del pin (vedi §10): la 10 kΩ su RST resta consigliata lo stesso, perché è lei che tiene il chip fuori dal reset se l'ESP32 si dimentica del pin (reset a metà, firmware di qualcun altro).
 
 Quale breakout (contatti sopra o sotto) e in che verso, si decide a pezzi in mano:
 1. Guarda su quale faccia del flat ci sono i contatti dorati e scegli il breakout che li tocca. Se il tipo è sbagliato non c'è contatto e il touch semplicemente non risponde.
@@ -202,7 +204,27 @@ Mai collegare la LiPo **anche** ai pad BAT sotto il XIAO: si scavalca l'interrut
 - Carica a circa 0,5 A fissi: la 4000 mAh ci mette **9–10 ore**. Si carica di notte.
 - Non c'è nessun LED di carica e il firmware non può sapere se la batteria sta caricando. Il LED rosso del XIAO può accendersi per una trentina di secondi a ogni accensione: non vuol dire niente.
 - A batteria scarica (circa 2,8 V) la scheda si spegne di colpo, senza avviso. Con il MAX17048 il firmware può avvisare prima.
-- L'interruttore è lo spento vero. Il "sonno" del firmware (risveglio col tocco) consuma poco ma non zero: quanto, lo misuriamo a pezzi in mano.
+- L'interruttore è lo spento vero. Il "sonno" del firmware (risveglio col tocco) consuma poco ma non zero: quanto, lo misuriamo a pezzi in mano (procedura in `collaudo.md` §G).
+
+### Cosa resta acceso nel sonno
+
+Dopo 5 minuti senza tocchi e senza niente in corso il firmware `arrocco` mette la scheda in deep sleep. Chi consuma, a stima, prima della misura vera:
+
+| Parte | Stato nel sonno | Consumo atteso |
+|---|---|---|
+| GT911 | acceso, scansiona: green mode, una scansione ogni ~40 ms | **~3,3 mA** (datasheet, tipico): è quasi tutto |
+| ESP32-S3 | deep sleep, dominio RTC acceso per la sveglia su INT | decine di µA |
+| Pannello | hibernate (deep sleep dell'UC8179), l'immagine resta | ~1 µA |
+| XIAO (regolatore 3,3 V) e boost ETA9740 | sempre accesi | da misurare (il boost: 80 µA a vuoto da datasheet) |
+
+Una cosa che il datasheet dell'ETA9740 non dice: se a carico leggero il boost resta acceso o si spegne da solo, come molti chip da power bank. Se si spegnesse, la scheda addormentata resterebbe senza corrente e non si sveglierebbe più col tocco. Si prova a batteria (`collaudo.md` §G2) prima di fidarsi del sonno.
+
+I pin nel sonno:
+- **D6 (RST del touch)** resta a 3,3 V: lo tiene il pin, "congelato" alto prima di dormire. Se a scheda addormentata lì si leggono 0 V, il touch è in reset e **non può svegliare la scheda**: si spegne e riaccende con l'interruttore (a USB staccata).
+- **D9 (INT)** resta a 3,3 V tramite la resistenza interna verso l'alto; il GT911 lo abbassa a ogni rapporto per un ciclo di scansione (5–20 ms secondo la sua configurazione; mai meno di 200 µs per il datasheet), e il primo abbassamento sveglia l'ESP32.
+- Gli altri pin sono lasciati liberi: il bus I2C resta alto per le sue resistenze esterne.
+
+Con la USB collegata la scheda dorme lo stesso: la porta seriale sparisce dal Mac finché un tocco non la sveglia.
 
 ## 11. Pin liberi
 

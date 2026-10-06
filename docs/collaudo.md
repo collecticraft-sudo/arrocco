@@ -69,7 +69,7 @@ Le righe della colonna, dall'alto:
 
 | Riga | Cosa c'è scritto | Cosa vuol dire |
 |---|---|---|
-| 1 | `Arrocco hwtest 0.5` | versione |
+| 1 | `Arrocco hwtest 0.6` | versione |
 | 2 | `Touch OK 0x5D id 911` | touch trovato, fili RST e INT provati |
 | | `TOUCH WARN 0x.. id 911` | il touch risponde ma c'è un difetto: leggi la riga 3 |
 | | `TOUCH FAIL no answer` | nessuna risposta sull'I2C: leggi la riga 3 |
@@ -95,7 +95,7 @@ Le righe della colonna, dall'alto:
 
 Regole del firmware, utili per capire cosa vedi: **un refresh per ogni tocco**; dopo 16 parziali fa un refresh completo alla prima pausa di 1,5 s (al più tardi dopo 32); dopo 3 s senza tocchi spegne l'alta tensione del pannello (`PANEL power off after idle`), e il refresh seguente dura circa 0,15 s in più. I tocchi fatti mentre lo schermo si aggiorna vengono buttati.
 
-**Se il touch è morto** si comanda dal monitor seriale: `b` `t` `p` `s` cambiano schermata, `k` tutto nero, `w` tutto bianco, `r` refresh parziale, `f` completo, `i` rapporto, `?` aiuto.
+**Se il touch è morto** si comanda dal monitor seriale: `b` `t` `p` `s` cambiano schermata, `k` tutto nero, `w` tutto bianco, `r` refresh parziale, `f` completo, `i` rapporto, `g` configurazione del touch (solo lettura, vedi §G), `?` aiuto.
 
 **Tappa 0 — XIAO da solo.**
 Solo XIAO e cavo USB-C. Non servono i pin saldati. Carica il firmware e apri il monitor.
@@ -179,7 +179,7 @@ Copia e incolla questa lista con le risposte. La cosa più utile: **tutto il log
 12. Col multimetro: tensione della batteria all'arrivo; polarità della spina com'era (giusta o invertita).
 13. Col multimetro, in ohm: resistenza del KY-006 tra `S` e `−` (circuito aperto = piezo; circa 16 Ω = magnetico).
 14. Col multimetro, a tutto spento e con i Dupont staccati, sul FTS02 con il flat del touch inserito: ohm tra `A4` e `3.3V`, tra `A5` e `3.3V`, tra `A3` e `3.3V`. Serve a capire se il flat ha già le sue resistenze di pull-up: il FTS02 da solo dà circa 10 kΩ sulle prime due e circuito aperto sulla terza; valori più bassi vogliono dire che il flat ne ha di sue.
-15. Più avanti, col multimetro in serie alla batteria (portata µA/mA): consumo con la scheda "addormentata".
+15. Col multimetro in serie alla batteria: consumo da sveglia e da addormentata (procedura in §G2).
 
 ## F. Il primo collaudo vero (06/10/2026)
 
@@ -193,4 +193,105 @@ Copia e incolla questa lista con le risposte. La cosa più utile: **tutto il log
 | Filo INT | il GT911 qui abbassa INT a ogni rapporto (fronte di discesa) e serve una resistenza verso l'alto: dalla 0.5 la mette l'ESP32. Con quella verso il basso il filo risultava provato ma senza impulsi |
 | Flat del touch | va dritto in P7: con la prolunga in mezzo non risponde |
 | Buzzer | suona all'avvio |
-| Ancora da fare | batteria (serve il multimetro), MAX17048, codice lotto della driver board, misure col calibro |
+| Ancora da fare | batteria (serve il multimetro), MAX17048, codice lotto della driver board, misure col calibro; le prove della sezione G |
+
+## G. Batteria, sonno, WiFi e tocco leggero (firmware `arrocco` 0.2)
+
+Si carica il firmware vero (`pio run -e arrocco -t upload`) e si apre il monitor a 115200. `help` elenca tutti i comandi. Quello che segue va fatto nell'ordine; i numeri e le righe del log si scrivono qui in fondo, nella tabella G7.
+
+### G1. Il sonno
+
+1. Al banco, con la USB e il monitor aperto. Per non aspettare 5 minuti: `sleep-after 30` (vale fino al prossimo spegnimento; `sleep-after 0` toglie il sonno per le sessioni lunghe al seriale). Scrivere comandi conta come attività: il conto riparte a ogni riga.
+2. Dopo 30 s senza toccare niente, nel log:
+   - `SLEEP nothing touched and nothing running: sleep screen, then deep sleep until a touch`
+   - `REFRESH full ...`, `PANEL hibernating ...`
+   - `SLEEP #1: down after ... ms (picture)`
+
+   Poi la porta seriale sparisce dal Mac: è giusto, la USB dorme anche lei.
+3. Sullo schermo: la Notte stellata con il riquadro bianco "Tap to wake" in basso a destra.
+4. Un tocco qualsiasi: la scheda riparte e in 2–3 s mostra la prima schermata. Il primo tocco **non** deve premere niente sulla schermata nuova.
+5. Si riapre il monitor (la porta torna con lo stesso nome) e si scrive `sleep-status`. Atteso: `this boot: wake by a touch (INT LOW, ext0)`, `the touch can wake the board: yes`, e la durata del sonno. Se il monitor si era riaperto in tempo, nel log di avvio ci sono anche:
+   - `WAKE  from deep sleep #1 after N s, woken by a touch (INT LOW, ext0)`
+   - `TOUCH the wake-up touch: raw (x,y) ... dropped, it is not a tap` (oppure `had already lifted`)
+   - `TOUCH resumed at 0x5D with no reset: the chip kept running through the sleep`
+
+   Se invece c'è `TOUCH no answer at 0x5D after the sleep: full start, with a reset`, il GT911 è stato resettato durante il sonno: il pin RST non è rimasto alto (vedi G2, misura su D6). Va detto.
+6. Cosa lo tiene sveglio (`sleep-status` lo scrive in `held back by`, il log una volta sola in `SLEEP due ... but held back by: ...`):
+   - una partita con l'orologio (es. 5 + 0) che corre: non dorme finché il tempo non è finito;
+   - il motore che pensa;
+   - la radio accesa (`wifi-on`): dorme 2 minuti dopo l'ultimo lavoro di rete, quando nel log compare `WIFI  radio off`;
+   - un dito sul vetro.
+7. Un tocco mentre si disegna la schermata del sonno: la scheda deve svegliarsi subito dopo (nel log `INT is LOW, a touch is waiting: the board wakes again at once`).
+8. `sleep-now` addormenta subito (rifiuta se il touch non potrebbe svegliarla).
+
+### G2. Il consumo, col multimetro
+
+**A USB staccata** (con la USB la scheda va a USB qualunque cosa faccia l'interruttore).
+
+- Il multimetro va **in serie alla batteria**: il modo più comodo è una prolunga JST PH 2.0 col filo rosso tagliato, i due capi del rosso ai puntali (rosso del multimetro verso la batteria, nero verso la scheda), puntale rosso nella boccola **mA**. Si collega tutto a interruttore su OFF, poi ON.
+- Portata **200 mA** per tutto. Non serve la portata µA, ed è meglio evitarla: la sua resistenza interna fa cadere la tensione quando la scheda si sveglia e la fa ripartire. Molti multimetri interrompono il circuito quando si cambia portata: la scheda si riavvia, non è un guasto.
+- Misure da scrivere in G7:
+  1. sveglia sul menu, radio spenta, senza toccare: ____ mA;
+  2. durante un refresh (il valore sale per mezzo secondo): ____ mA;
+  3. **addormentata**, dopo 30 s di sonno (il GT911 passa in green mode dopo qualche secondo): ____ mA;
+  4. con `wifi-on`, a rete agganciata: ____ mA.
+- Atteso nel sonno: **pochi mA**, quasi tutti del GT911 (3,3 mA tipici nel datasheet, a 3,3 V; dalla batteria qualcosa in più per il boost a 5 V e il regolatore del XIAO). Con 4000 mAh vuol dire circa un mese di sonno. Se si legge molto di più (decine di mA), qualcosa non dorme: va detto col log.
+- Col voltmetro, a scheda addormentata, rispetto a GND: **D6 = 3,3 V** (RST del touch tenuto alto) e **D9 = 3,3 V** (INT a riposo). D6 a 0 V vuol dire touch in reset: non può svegliare la scheda.
+- **La prova che conta, a batteria**: lasciarla dormire almeno 5 minuti, poi un tocco. Si deve svegliare. Il datasheet del boost ETA9740 della driver board non dice se a carico leggero (pochi mA) si spegne da solo, come fanno molti chip da power bank: se la scheda non si sveglia e su `3V3` (o su `5V`) si leggono 0 V, è successo questo. Si riaccende con l'interruttore; va detto, perché cambia il progetto (servirebbe tenere un carico minimo, o un'altra scheda).
+
+### G3. WiFi solo quando serve
+
+1. All'avvio: `WIFI  radio off; network '...' stored, joined only when a network job needs it` (oppure `no network stored`). Nessuna rete Arrocco-XXXX deve comparire sul telefono.
+2. `wifi-status` → `WiFi off - radio off, ...`.
+3. `wifi-portal` → `WIFI  portal open: SSID 'Arrocco-XXXX', http://4.3.2.1 - it closes after 5 min with no page asked` e `WIFI  port 80 open (setup portal)`. Si sceglie la rete dal telefono: `network '...' stored`, `portal closed`, `connecting`, `online`, e 2 minuti dopo `WIFI  radio off: no network job for 120 s`. Se invece non lo si usa: dopo 5 minuti `WIFI  radio off: nobody used the portal for 5 min`.
+4. Col token salvato: `li-whoami` → `NET   queued; the radio comes up first` → `WIFI  radio on: a network job needs '...'` → `WIFI  online` → `NET   GET /api/account -> HTTP 200` → 2 minuti dopo `WIFI  radio off`.
+5. `oauth-start` a radio spenta: `OAUTH the radio is off: joining the network first, the URL follows`, poi l'indirizzo. Se non si completa il login, dopo 10 minuti `OAUTH failed: the phone did not come back in time` e `WIFI  port 80 closed`.
+6. Dopo un `li-whoami` e un `oauth-start` completo: `net`, e si copia la riga `stack never used: arrocco-net ... B, arrocco-req ... B, arrocco-str* ...`. Servono a dimensionare le pile dei task di rete (oggi 10 KB e 8 KB).
+7. Una riga che non è un comando non viene mai ripetuta nel log (potrebbe essere un token incollato): `CMD   unknown command (N characters, not shown)`.
+
+### G4. Il tocco leggero ("devo premere forte")
+
+La soglia sta nella configurazione del GT911, scritta in fabbrica: `Screen_Touch_Level` (quanto segnale serve perché un tocco cominci) e `Screen_Leave_Level` (sotto quanto finisce). Più bassi = basta un tocco più leggero, ma anche più facile che il rumore del pannello mentre si aggiorna sembri un dito. Il firmware non la cambia mai da solo; si fa così:
+
+1. `touch-cfg` (nel firmware di collaudo il tasto `g` fa lo stesso): si copiano **tutte** le righe `TOUCH cfg` in G7. Sono la configurazione di fabbrica di questo pannello.
+2. Prima prova a valori di fabbrica: tocchi leggeri sui quattro angoli, al centro, sulle caselle, col polpastrello e con la punta del dito; a USB e a batteria (vedi G5). Si annota cosa non prende.
+3. `touch-ladder`: stampa quattro gradini calcolati dai valori di fabbrica (85 %, 70 %, 60 %, 50 %), già scritti come comandi. Si parte dal **secondo** (70 %), che si sente: se basta e non fa fantasmi si prova anche il primo (85 %), e si tiene **il più alto che va bene**; se non basta, il terzo. Il quarto (50 %) è il limite: i comandi non scendono oltre.
+4. `touch-level T L` senza `yes` mostra solo cosa scriverebbe. Con `touch-level T L yes` scrive: la prima volta salva il blocco di fabbrica in NVS e lo stampa (righe `TOUCH factory ...`: copiarle in G7 anche queste). Mentre scrive **non si tocca il vetro** (il chip ricalibra). Atteso: `TOUCH done: Screen_Touch_Level T, Screen_Leave_Level L, ...`.
+5. Si rifà la prova del punto 2.
+6. Prova dei tocchi fantasma: per due minuti nessuno tocca la scheda mentre lo schermo si aggiorna (una partita 5 + 0 avviata ridisegna l'orologio ogni 10 s); nel log **nessuna** riga `TOUCH down`. Poi un dito tenuto 2–3 mm sopra il vetro, fermo: niente deve succedere.
+7. Prende ancora poco → gradino successivo. Fantasmi o tocchi da lontano → gradino precedente, o `touch-restore yes`.
+8. La scrittura resta nel chip? Si spegne davvero (USB staccata, interruttore OFF), si riaccende, `touch-cfg`: se i valori sono quelli nuovi il GT911 li tiene nella sua flash (è quello che ci si aspetta). Scriverlo in G7.
+9. Facoltativo: `touch-green 15 yes` tiene il chip in scansione veloce 15 s dopo l'ultimo tocco invece dei secondi di fabbrica. Da provare se si perde soprattutto **il primo** tocco dopo una pausa.
+10. `touch-restore yes` riscrive il blocco di fabbrica; `touch-cfg` deve dire `identical to the factory copy kept in NVS`.
+11. `touch-stats` dopo una partita: quanti tocchi, quanti scartati e perché. Va copiato in G7.
+
+### G5. A batteria il tocco è più debole
+
+È normale e va provato apposta. A USB collegata al Mac la massa della scheda è legata alla terra dell'impianto, e il dito (che è "a terra" anche lui, tramite il corpo) dà al touch un segnale pieno. A batteria, con la scheda appoggiata sul tavolo e nessuno che tocca parti metalliche, la massa della scheda "galleggia": il percorso del segnale si chiude male e lo stesso dito vale meno. I controller capacitivi come il GT911 ne risentono meno di altri, ma ne risentono. Quindi:
+- la soglia giusta si sceglie **a batteria**, che è come si gioca;
+- aiuta una **superficie di massa** grande vicino al pannello: un foglio di nastro di alluminio o di rame all'interno del fondo della scocca, collegato a GND con un filo. Più è grande, meglio è;
+- aiuta anche se la mano che non tocca appoggia su una parte metallica collegata a GND (una cornice, una striscia sul bordo): utile da sapere, non indispensabile.
+
+### G6. Tocchi durante i refresh
+
+1. "Pezzo, poi destinazione" veloce: si tocca un pezzo e subito, entro mezzo secondo, la casella di arrivo. La mossa deve essere giocata. Nel log: `TOUCH a touch during the refresh at (x,y) still means the same: taken as a tap`.
+2. Un tocco su un pulsante mentre lo schermo si aggiorna, o subito dopo una mossa: viene scartato e il log dice perché (`... dropped: the position changed under it`, `... the refresh came from a button`, ...).
+3. In una partita 5 + 0 sotto i 20 secondi l'orologio si ridisegna ogni secondo: i tocchi su una casella fatti durante quei ridisegni devono valere.
+
+### G7. Risultati
+
+| Cosa | Risultato |
+|---|---|
+| Sonno: schermata, `WAKE`, `TOUCH resumed`, primo tocco ignorato | |
+| Corrente sveglia (menu, radio spenta) | |
+| Corrente durante un refresh | |
+| Corrente addormentata | |
+| A batteria, dopo 5 minuti di sonno, il tocco la sveglia? | |
+| Corrente con la rete agganciata | |
+| D6 e D9 nel sonno | |
+| WiFi: spento all'avvio, portale, `li-whoami`, spegnimento dopo 2 min | |
+| `stack never used` dopo `li-whoami` e `oauth-start` | |
+| `touch-cfg` di fabbrica (tutte le righe) | |
+| Gradino scelto (`touch-level ...`) e come va, a USB e a batteria | |
+| La scrittura sopravvive allo spegnimento? | |
+| `touch-stats` dopo una partita | |

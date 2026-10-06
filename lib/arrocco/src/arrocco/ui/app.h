@@ -50,6 +50,10 @@ class ChessApp final : public arrocco::App {
   ScreenId currentScreen() const { return screenId_; }
   uint8_t partialsSinceFull() const { return partialsSinceFull_; }
   const chess::Game& game() const { return game_; }
+  // For the firmware's sleep and touch policy (src/app/main.cpp): no deep sleep while the
+  // game clock counts down, and no tap replayed after a refresh while a popup covers the board.
+  const GameClock& clock() const { return ctx_.clock; }
+  bool gamePopupOpen() const { return game_screen_.popupOpen(); }
 
  private:
   Screen& current();
