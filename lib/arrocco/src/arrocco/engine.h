@@ -61,7 +61,7 @@ constexpr EngineLevel kEngineLevels[kEngineLevelCount] = {
     {ui::str::kLevel5, 1200u,   800u,  8,  25, true},
     {ui::str::kLevel6, 2000u,  3000u, 12,  10, true},
     {ui::str::kLevel7, 3000u, 12000u, 20,   0, true},
-    {ui::str::kLevel8, 5000u,      0u, 42,   0, true},
+    {ui::str::kLevel8, 5000u,      0u, 20,   0, true},  // 20, not 42: see kTaskStack in esp32_engine.cpp
 };
 
 // The buffers start() is given, and that an implementation has to copy before its

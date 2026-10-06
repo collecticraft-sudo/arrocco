@@ -25,7 +25,11 @@
 namespace arrocco_app {
 namespace {
 
-constexpr uint32_t kTaskStack = 48u * 1024u;   // measured need is far below; this is the margin
+// CT800 recurses once per ply: Search_Negascout takes about 1.5 KB of stack per ply on
+// Xtensa, plus quiescence. Measured on the same sources (Mac, scaled by the frame sizes):
+// a depth cap of 20 needs at most about 39 KB, 28 about 50 KB, the old 42 about 70 KB.
+// Every level is capped at 20 plies (engine.h), so 48 KB keeps a margin of about 9 KB.
+constexpr uint32_t kTaskStack = 48u * 1024u;
 constexpr BaseType_t kTaskCore = 0;            // core 1 runs Arduino's loop task, the panel and touch
 // Idle priority on purpose: at any higher priority a search with no node-rate ceiling
 // would starve IDLE0 and the task watchdog would fire after five seconds. At the idle
