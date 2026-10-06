@@ -20,7 +20,7 @@ The first board was assembled and brought up on 6 October 2026. On the real hard
 - the real firmware runs: menu, two players on the same board, and the CT800 engine;
 - it runs on the LiPo, switched by the driver board's power switch.
 
-Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). Next: sleep with wake on touch, resuming a game after a power loss, the puzzle and Lichess screens, the case.
+Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). Next: sleep with wake on touch, resuming a game after a power loss, the Lichess screens, the case. The offline puzzles are built and tested in the simulator, and wait for their first run on the board.
 
 ## Hardware
 
@@ -65,6 +65,7 @@ The tests need only a C++17 compiler. The simulator also needs Python 3 (no pack
 ```sh
 make -C test/chess test     # rules library tests (perft)
 make -C test/savegame test  # the saved game: round trips, and every corrupt blob refused
+make -C test/puzzles test   # the puzzle pack, the puzzle rating and every puzzle solved
 sim/run.sh                  # build, start the local server, open the page
 ```
 
