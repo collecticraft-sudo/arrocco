@@ -10,7 +10,7 @@ Arrocco is an open alternative to commercial e-ink chessboards. It is not affili
 
 ## Video
 
-![Arrocco: what it is made of, and a game to checkmate](docs/media/arrocco-video.jpg)
+https://github.com/user-attachments/assets/46ad5615-c2e3-4168-b6a4-794eb43ac288
 
 24 seconds: the parts it is made of, then a game to checkmate on the real firmware screens (captured from the simulator).
 A non-commercial project video. Music: "AURA" by Ogryzek, which belongs to its rights holders. Photos: Unsplash (Sasun Bughdaryan, Alexandre Debiève, Jakub Żerdzicki). Fonts: Instrument Serif and Unbounded (SIL Open Font License).
