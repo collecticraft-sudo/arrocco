@@ -65,6 +65,21 @@ class Transport {
   virtual int readStream(int id, char* out, int outSize) = 0;
   virtual void closeStream(int id) = 0;
 
+  // A POST whose answer is a stream: `body` is a form, as for beginRequest(). One call uses it,
+  // POST /api/challenge/{user} with keepAliveStream=true: Lichess lets a real-time challenge
+  // expire after 20 s unless the connection that created it stays open, and with this one it
+  // stays open until the friend answers. It is read and closed like any other stream, it may be
+  // silent for longer than the 20 s a game stream is allowed (nothing is said until the answer),
+  // and it is never sent twice: no connect retries, because a retry would be a second challenge.
+  // Optional: with supportsPostStreams() false (the default) the client sends the challenge as a
+  // plain request instead, 20 s expiry included.
+  virtual bool supportsPostStreams() const { return false; }
+  virtual int openPostStream(const char* path, const char* body) {
+    (void)path;
+    (void)body;
+    return kNoStream;
+  }
+
   // The HTTP status behind the last openStream() that returned kNoStream, or 0 when the
   // implementation cannot tell. It exists for ONE number: 429. A stream Lichess refused for rate
   // limiting must not be tried again two seconds later — it wants a full minute — and without

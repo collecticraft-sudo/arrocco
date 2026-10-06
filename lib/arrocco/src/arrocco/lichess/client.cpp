@@ -193,7 +193,8 @@ LichessClient::LichessClient(Transport& transport, chess::Game& game)
     : transport_(transport),
       game_(game),
       eventReader_(eventLineBuffer_, kEventLineSize),
-      gameReader_(gameLineBuffer_, kGameLineSize) {}
+      gameReader_(gameLineBuffer_, kGameLineSize),
+      challengeReader_(challengeLineBuffer_, kChallengeLineSize) {}
 
 // ---------------------------------------------------------------------- lifecycle
 
@@ -215,12 +216,15 @@ void LichessClient::end() {
   }
   closeGameStream();
   closeEventStream();
+  closeChallengeStream();
   state_ = ClientState::Offline;
   username_[0] = '\0';
   gameId_[0] = '\0';
   opponent_[0] = '\0';
   pendingChallengeId_[0] = '\0';
   queuedMove_[0] = '\0';
+  moveRetryArmed_ = false;
+  httpStatus_ = 0;
   challengeCount_ = 0;
   status_ = GameStatus::Unknown;
   winner_ = Winner::None;
@@ -237,16 +241,30 @@ void LichessClient::end() {
 void LichessClient::poll() {
   const uint32_t now = transport_.millis();
   pumpRequest(now);
-  // A move the rate limiter refused goes out again as soon as the backoff is over.
-  if (queuedMove_[0] != '\0' && pending_ == Pending::None && !inBackoff(now) &&
-      state_ == ClientState::Playing) {
-    char again[chess::kUciBufferSize];
-    copyText(again, sizeof again, queuedMove_);
-    queuedMove_[0] = '\0';
-    sendMove(again);
+  // A move that did not get through goes out again: after the backoff when the rate limiter
+  // refused it, a couple of seconds later when the slot was busy or the network failed. Unless
+  // the board moved on meanwhile: then the server has it (the POST that "failed" did arrive),
+  // and sending it again would only earn a "Not your turn".
+  if (queuedMove_[0] != '\0' && pending_ == Pending::None && state_ == ClientState::Playing) {
+    if (game_.plyCount() != queuedAtPly_) {
+      queuedMove_[0] = '\0';
+      moveRetryArmed_ = false;
+      bump();
+    } else if (!inBackoff(now) && (!moveRetryArmed_ || elapsed(now, moveRetryMs_, kMoveRetryDelayMs))) {
+      char again[chess::kUciBufferSize];
+      copyText(again, sizeof again, queuedMove_);
+      moveRetryArmed_ = false;
+      sendMove(again);
+    }
   }
   pumpEventStream(now);
   pumpGameStream(now);
+  pumpChallengeStream();
+}
+
+void LichessClient::armMoveRetry() {
+  moveRetryArmed_ = true;
+  moveRetryMs_ = transport_.millis();
 }
 
 // ---------------------------------------------------------------------- requests
@@ -288,8 +306,11 @@ void LichessClient::pumpRequest(uint32_t now) {
       const Pending kind = pending_;
       pending_ = Pending::None;
       transport_.endRequest();
+      httpStatus_ = 0;
       setError(ClientError::Network, "the request timed out");
       if (kind == Pending::Account) state_ = ClientState::Failed;
+      if (kind == Pending::Move) armMoveRetry();  // it may have arrived: poll() checks first
+      if (kind == Pending::AcceptChallenge) pendingChallengeId_[0] = '\0';
       bump();
     }
     return;
@@ -297,15 +318,21 @@ void LichessClient::pumpRequest(uint32_t now) {
   const Pending kind = pending_;
   pending_ = Pending::None;
   if (rs == RequestState::Idle) {  // the transport lost it: treat as a network failure
+    httpStatus_ = 0;
     setError(ClientError::Network, "the request was dropped");
     if (kind == Pending::Account) state_ = ClientState::Failed;
+    if (kind == Pending::Move) armMoveRetry();
+    if (kind == Pending::AcceptChallenge) pendingChallengeId_[0] = '\0';
     bump();
     return;
   }
   if (rs == RequestState::Failed) {
     transport_.endRequest();
+    httpStatus_ = 0;
     setTransportError(ClientError::Network, "cannot reach lichess.org");
     if (kind == Pending::Account) state_ = ClientState::Failed;
+    if (kind == Pending::Move) armMoveRetry();
+    if (kind == Pending::AcceptChallenge) pendingChallengeId_[0] = '\0';
     bump();
     return;
   }
@@ -341,8 +368,19 @@ bool LichessClient::streamRateLimited() {
 }
 
 void LichessClient::handleResponse(Pending kind, int httpStatus, int length) {
+  httpStatus_ = (httpStatus >= 200 && httpStatus < 300) ? 0 : httpStatus;
   if (httpStatus == 429) {
     rateLimited(kind);
+    return;
+  }
+  // A move sent again after a timeout whose first POST did arrive: the board already shows it,
+  // and the "Not your turn" that comes back is about a move that WAS played. Nothing to report.
+  if (kind == Pending::Move && game_.plyCount() != queuedAtPly_) {
+    httpStatus_ = 0;
+    moveRejected_ = false;
+    queuedMove_[0] = '\0';
+    if (error_ == ClientError::Network || error_ == ClientError::MoveRejected) clearError();
+    bump();
     return;
   }
   if (httpStatus < 200 || httpStatus >= 300) {
@@ -356,6 +394,7 @@ void LichessClient::handleResponse(Pending kind, int httpStatus, int length) {
       queuedMove_[0] = '\0';
       setError(ClientError::MoveRejected, detail);
     } else {
+      if (kind == Pending::AcceptChallenge) pendingChallengeId_[0] = '\0';   // no game is coming
       setError(ClientError::Http, detail);
       if (kind == Pending::Account) state_ = ClientState::Failed;
       if (kind == Pending::ChallengeAi || kind == Pending::ChallengeUser) {
@@ -409,10 +448,12 @@ void LichessClient::handleResponse(Pending kind, int httpStatus, int length) {
     case Pending::Move:
       moveRejected_ = false;
       queuedMove_[0] = '\0';
+      moveRetryArmed_ = false;
       clearError();
       bump();
       return;
     case Pending::ChallengeAction:
+    case Pending::AcceptChallenge:
     case Pending::Resign:
     case Pending::Abort:
     case Pending::DrawYes:
@@ -434,6 +475,7 @@ void LichessClient::closeEventStream() {
     eventStream_ = Transport::kNoStream;
   }
   eventReader_.reset();
+  eventHeard_ = false;
 }
 
 void LichessClient::closeGameStream() {
@@ -442,9 +484,21 @@ void LichessClient::closeGameStream() {
     gameStream_ = Transport::kNoStream;
   }
   gameReader_.reset();
+  gameHeard_ = false;
 }
 
-void LichessClient::feedLines(NdjsonReader& reader, const char* data, int size, bool isEvent) {
+void LichessClient::closeChallengeStream() {
+  if (challengeStream_ != Transport::kNoStream) {
+    transport_.closeStream(challengeStream_);
+    challengeStream_ = Transport::kNoStream;
+  }
+  challengeReader_.reset();
+  challengeAnswered_ = false;
+  cancelWanted_ = false;
+  challengeHeard_ = false;
+}
+
+void LichessClient::feedLines(NdjsonReader& reader, const char* data, int size, Lines kind) {
   int used = 0;
   while (used < size) {
     const int taken = reader.feed(data + used, size - used);
@@ -453,22 +507,28 @@ void LichessClient::feedLines(NdjsonReader& reader, const char* data, int size, 
     int length = 0;
     while (reader.takeLine(line, length)) {
       if (length == 0) continue;  // keep-alive
-      if (isEvent) {
+      if (kind == Lines::Event) {
         handleEventLine(line, length);
-      } else {
+      } else if (kind == Lines::Game) {
         handleGameLine(line, length);
         // The final gameState closes this stream from inside handleGameLine, and closeGameStream()
         // resets the very reader we are feeding. Anything left in the chunk belongs to a game that
         // is over: stop, instead of replaying it onto a board the user is already looking at.
         if (gameStream_ == Transport::kNoStream) return;
+      } else {
+        handleChallengeLine(line, length);
+        // The answer closes the challenge stream, and with it this reader.
+        if (challengeStream_ == Transport::kNoStream) return;
       }
     }
     if (taken == 0 && !reader.hasLine()) break;  // nothing more can be done with this chunk
   }
   if (reader.overflow()) {
     reader.clearOverflow();
-    setError(ClientError::Protocol, isEvent ? "an event line was too long" : "a game line was too long");
-    if (!isEvent) desynchronised_ = true;
+    setError(ClientError::Protocol, kind == Lines::Event  ? "an event line was too long"
+                                    : kind == Lines::Game ? "a game line was too long"
+                                                          : "the challenge line was too long");
+    if (kind == Lines::Game) desynchronised_ = true;
     bump();
   }
 }
@@ -489,6 +549,7 @@ void LichessClient::pumpEventStream(uint32_t now) {
     }
     eventReader_.reset();
     eventActivityMs_ = now;
+    eventHeard_ = false;
     return;
   }
 
@@ -504,7 +565,11 @@ void LichessClient::pumpEventStream(uint32_t now) {
     }
     if (n == 0) break;
     eventActivityMs_ = now;
-    feedLines(eventReader_, chunk_, n, true);
+    if (!eventHeard_) {
+      eventHeard_ = true;
+      bump();
+    }
+    feedLines(eventReader_, chunk_, n, Lines::Event);
   }
 
   if (elapsed(now, eventActivityMs_, kSilenceTimeoutMs)) {
@@ -518,6 +583,11 @@ void LichessClient::pumpEventStream(uint32_t now) {
 
 void LichessClient::pumpGameStream(uint32_t now) {
   if (gameId_[0] == '\0' || state_ != ClientState::Playing) return;
+  if (finishSeen_ && elapsed(now, finishSeenMs_, kFinishGraceMs)) {
+    finishSeen_ = false;
+    finishGame(finishStatus_, finishWinner_);
+    return;
+  }
 
   if (gameStream_ == Transport::kNoStream) {
     if (inBackoff(now)) return;
@@ -537,6 +607,7 @@ void LichessClient::pumpGameStream(uint32_t now) {
     }
     gameReader_.reset();
     gameActivityMs_ = now;
+    gameHeard_ = false;
     return;
   }
 
@@ -552,7 +623,13 @@ void LichessClient::pumpGameStream(uint32_t now) {
     }
     if (n == 0) break;
     gameActivityMs_ = now;
-    feedLines(gameReader_, chunk_, n, false);
+    if (!gameHeard_) {
+      gameHeard_ = true;
+      // Back after a reconnect: the "reconnecting" that was on the screen is over.
+      if (error_ == ClientError::Network) clearError();
+      bump();
+    }
+    feedLines(gameReader_, chunk_, n, Lines::Game);
     if (state_ != ClientState::Playing) return;  // the game ended while we were reading
   }
 
@@ -565,6 +642,85 @@ void LichessClient::pumpGameStream(uint32_t now) {
   }
 }
 
+// Our kept-alive challenge. No silence timeout here: Lichess has nothing to say on it until the
+// friend answers, and the event stream (keep-alive every 7 s) already watches the connection.
+void LichessClient::pumpChallengeStream() {
+  if (challengeStream_ == Transport::kNoStream) return;
+  for (int guard = 0; guard < 8; ++guard) {
+    const int n = transport_.readStream(challengeStream_, chunk_, static_cast<int>(sizeof chunk_));
+    if (n < 0) {
+      // Over without an answer: refused before it said anything ("No such user"), or lost with
+      // its connection afterwards.
+      const bool answered = challengeAnswered_;
+      const bool heard = challengeHeard_;
+      closeChallengeStream();
+      if (!answered && state_ == ClientState::Challenging) {
+        if (heard) {
+          setTransportError(ClientError::Network, "the challenge was lost with the connection");
+        } else {
+          Builder why(lastError_, sizeof lastError_);
+          const char* detail = transport_.lastError();
+          why.text(detail != nullptr && detail[0] != '\0' ? detail : "Lichess refused the challenge");
+          error_ = ClientError::Http;
+        }
+        outgoingEnded(error_, lastError_);
+      }
+      return;
+    }
+    if (n == 0) return;
+    feedLines(challengeReader_, chunk_, n, Lines::Challenge);
+    if (challengeStream_ == Transport::kNoStream) return;
+  }
+}
+
+// The kept-alive challenge says two things: the challenge itself first, then {"done":...}.
+void LichessClient::handleChallengeLine(const char* line, int length) {
+  const JsonObject root(line, length);
+  char done[kWordSize] = {};
+  if (root.copyString("done", done, sizeof done)) {
+    challengeAnswered_ = true;
+    if (sameText(done, "accepted")) {
+      // The game has the challenge's id. The event stream will say gameStart too; following it
+      // from here means a hiccup on that stream cannot leave the board waiting.
+      char id[kGameIdSize] = {};
+      copyText(id, sizeof id, pendingChallengeId_);
+      closeChallengeStream();
+      if (id[0] != '\0' && state_ == ClientState::Challenging) followGame(id);
+      return;
+    }
+    closeChallengeStream();
+    if (state_ == ClientState::Challenging) {
+      outgoingEnded(ClientError::Http, sameText(done, "declined") ? "the challenge was declined"
+                                                                   : "the challenge was cancelled");
+    }
+    return;
+  }
+  char id[kChallengeIdSize] = {};
+  bool found = root.copyString("id", id, sizeof id) && id[0] != '\0';
+  if (!found) {
+    const JsonObject challenge = root.object("challenge");
+    found = challenge.valid() && challenge.copyString("id", id, sizeof id) && id[0] != '\0';
+  }
+  if (!found || !safeId(id)) return;
+  challengeHeard_ = true;
+  if (cancelWanted_) {
+    closeChallengeStream();
+    challengeActionRequest(id, "cancel");
+    return;
+  }
+  copyText(pendingChallengeId_, sizeof pendingChallengeId_, id);
+}
+
+// Our challenge is over without a game: back to Idle, with the reason on the screen.
+void LichessClient::outgoingEnded(ClientError kind, const char* text) {
+  char why[kErrorSize];
+  copyText(why, sizeof why, text);
+  pendingChallengeId_[0] = '\0';
+  state_ = ClientState::Idle;
+  setError(kind, why);
+  bump();
+}
+
 // ---------------------------------------------------------------------- the event stream
 
 void LichessClient::handleEventLine(const char* line, int length) {
@@ -574,7 +730,13 @@ void LichessClient::handleEventLine(const char* line, int length) {
     case EventType::GameStart: {
       const bool ours = pendingChallengeId_[0] != '\0' && sameText(pendingChallengeId_, event.game.id);
       if (state_ == ClientState::Playing && !sameText(gameId_, event.game.id)) return;  // another game: ignore
-      if (state_ != ClientState::Playing && (autoFollow_ || ours)) {
+      // A game the Board API refuses (compat.board false: bullet, or a variant) would only be
+      // reopened every two seconds for ever, and a correspondence game is not a reason to take
+      // the screen over. Our own challenge, or the one we accepted, is followed whatever it is.
+      const bool boardCanPlay = !(event.game.compatKnown && !event.game.compatBoard);
+      const bool realTime = !sameText(event.game.speed, "correspondence");
+      if (state_ != ClientState::Playing && (ours || (autoFollow_ && boardCanPlay && realTime))) {
+        closeChallengeStream();
         pendingChallengeId_[0] = '\0';
         copyText(opponent_, sizeof opponent_, event.game.opponent);
         opponentAiLevel_ = event.game.opponentAiLevel;
@@ -585,10 +747,19 @@ void LichessClient::handleEventLine(const char* line, int length) {
       return;
     }
     case EventType::GameFinish: {
-      if (sameText(gameId_, event.game.id)) {
-        finishGame(event.game.status == GameStatus::Unknown ? status_ : event.game.status,
-                   event.game.winner != Winner::None ? event.game.winner : winner_);
+      if (!sameText(gameId_, event.game.id) || state_ != ClientState::Playing) return;
+      const GameStatus endStatus = event.game.status == GameStatus::Unknown ? status_ : event.game.status;
+      const Winner endWinner = event.game.winner != Winner::None ? event.game.winner : winner_;
+      if (gameConnected()) {
+        // The game stream is live: its last gameState, with the last move on it, is on its way.
+        // Ending here would close that stream first and leave the move off the board.
+        finishSeen_ = true;
+        finishSeenMs_ = transport_.millis();
+        finishStatus_ = endStatus;
+        finishWinner_ = endWinner;
+        return;
       }
+      finishGame(endStatus, endWinner);
       return;
     }
     case EventType::Challenge:
@@ -600,6 +771,7 @@ void LichessClient::handleEventLine(const char* line, int length) {
       forgetChallenge(event.challenge.id);
       if (sameText(pendingChallengeId_, event.challenge.id)) {
         pendingChallengeId_[0] = '\0';
+        closeChallengeStream();
         if (state_ == ClientState::Challenging) state_ = ClientState::Idle;
         setError(ClientError::Http, event.type == EventType::ChallengeDeclined ? "the challenge was declined"
                                                                                : "the challenge was cancelled");
@@ -670,6 +842,7 @@ void LichessClient::handleGameLine(const char* line, int length) {
     case GameMessageType::OpponentGone:
       opponentGone_ = message.gone;
       claimWinInSeconds_ = message.gone ? message.claimWinInSeconds : -1;
+      goneAtMs_ = transport_.millis();
       bump();
       return;
     case GameMessageType::ChatLine:  // we never send chat and have nowhere to show it
@@ -748,11 +921,18 @@ void LichessClient::applyState(const GameStateInfo& info) {
   status_ = info.status;
   winner_ = info.winner;
   if (game_.plyCount() != before) moveRejected_ = false;
+  // The server has our move (the board shows it): nothing is left to send. A POST still in
+  // flight keeps its slot; its answer finds the board moved on and says nothing.
+  if (queuedMove_[0] != '\0' && game_.plyCount() != queuedAtPly_ && pending_ != Pending::Move) {
+    queuedMove_[0] = '\0';
+    moveRetryArmed_ = false;
+  }
   bump();
   if (statusIsFinished(info.status)) finishGame(info.status, info.winner);
 }
 
 void LichessClient::finishGame(GameStatus endStatus, Winner endWinner) {
+  finishSeen_ = false;
   status_ = endStatus;
   winner_ = endWinner;
   queuedMove_[0] = '\0';
@@ -804,6 +984,8 @@ bool LichessClient::startAiGame(int level, int clockLimitSeconds, int clockIncre
   }
   gameId_[0] = '\0';
   pendingChallengeId_[0] = '\0';
+  opponent_[0] = '\0';      // the gameFull names this game's opponent
+  opponentAiLevel_ = -1;
   status_ = GameStatus::Unknown;
   winner_ = Winner::None;
   opponentGone_ = false;
@@ -833,22 +1015,65 @@ bool LichessClient::challengeUser(const char* user, bool isRated, int clockLimit
     setError(ClientError::Protocol, "too fast for the Lichess board API: 3+0 or slower");
     return false;
   }
+  const bool keepAlive = transport_.supportsPostStreams();
   Builder body(body_, sizeof body_);
   body.text(isRated ? "rated=true" : "rated=false");
   body.text("&clock.limit=").number(limit);
   body.text("&clock.increment=").number(increment);
   body.text("&variant=standard");
   if (!randomColor) body.text(color == chess::Color::White ? "&color=white" : "&color=black");
+  if (keepAlive) body.text("&keepAliveStream=true");
   if (!path.ok() || !body.ok()) {
     setError(ClientError::Protocol, "the request does not fit");
     return false;
   }
   gameId_[0] = '\0';
   pendingChallengeId_[0] = '\0';
-  return startRequest(Pending::ChallengeUser, Method::Post, path_, body_);
+  opponent_[0] = '\0';      // until the game says who it is (the name we typed is not the spelling)
+  opponentAiLevel_ = -1;
+  if (!keepAlive) return startRequest(Pending::ChallengeUser, Method::Post, path_, body_);
+
+  if (inBackoff(transport_.millis())) {
+    setError(ClientError::RateLimited, "rate limited: waiting before the next request");
+    return false;
+  }
+  closeChallengeStream();
+  challengeStream_ = transport_.openPostStream(path_, body_);
+  if (challengeStream_ == Transport::kNoStream) {
+    if (!streamRateLimited()) setTransportError(ClientError::Network, "cannot send the challenge");
+    return false;
+  }
+  challengeReader_.reset();
+  challengeAnswered_ = false;
+  clearError();
+  state_ = ClientState::Challenging;
+  bump();
+  return true;
 }
 
-bool LichessClient::challengeActionRequest(const char* id, const char* action) {
+void LichessClient::cancelOutgoing() {
+  // Whatever the stream already brought first: its id, or an answer that came before the tap.
+  if (state_ == ClientState::Challenging) pumpChallengeStream();
+  if (state_ == ClientState::Playing) return;   // accepted before the cancel: the game is on
+  char id[kChallengeIdSize] = {};
+  copyText(id, sizeof id, pendingChallengeId_);
+  pendingChallengeId_[0] = '\0';
+  if (state_ == ClientState::Challenging) state_ = ClientState::Idle;
+  clearError();
+  bump();
+  if (id[0] == '\0' && challengeStream_ != Transport::kNoStream) {
+    // Withdrawn before Lichess said its id. Closing the stream would only let it lapse in 20 s,
+    // time enough for the friend to accept it: the stream stays until the id comes, and the
+    // challenge is cancelled then (handleChallengeLine).
+    cancelWanted_ = true;
+    return;
+  }
+  closeChallengeStream();
+  // With its id known it is cancelled outright, so the friend's screen stops offering it.
+  if (id[0] != '\0') challengeActionRequest(id, "cancel");
+}
+
+bool LichessClient::challengeActionRequest(const char* id, const char* action, Pending kind) {
   if (!safeId(id)) {
     setError(ClientError::Protocol, "that is not a challenge id");
     return false;
@@ -859,10 +1084,15 @@ bool LichessClient::challengeActionRequest(const char* id, const char* action) {
     setError(ClientError::Protocol, "the request does not fit");
     return false;
   }
-  return startRequest(Pending::ChallengeAction, Method::Post, path_, nullptr);
+  return startRequest(kind, Method::Post, path_, nullptr);
 }
 
-bool LichessClient::acceptChallenge(const char* id) { return challengeActionRequest(id, "accept"); }
+// The game that starts from it is ours: followed even when auto-follow would leave it alone.
+bool LichessClient::acceptChallenge(const char* id) {
+  const bool sent = challengeActionRequest(id, "accept", Pending::AcceptChallenge);
+  if (sent) copyText(pendingChallengeId_, sizeof pendingChallengeId_, id);
+  return sent;
+}
 
 bool LichessClient::declineChallenge(const char* id) {
   const bool sent = challengeActionRequest(id, "decline");
@@ -882,8 +1112,13 @@ bool LichessClient::followGame(const char* id) {
     return false;
   }
   closeGameStream();
+  closeChallengeStream();
+  pendingChallengeId_[0] = '\0';
   copyText(gameId_, sizeof gameId_, id);
   initialFen_[0] = '\0';
+  queuedMove_[0] = '\0';
+  moveRetryArmed_ = false;
+  finishSeen_ = false;
   appliedPlies_ = 0;
   status_ = GameStatus::Unknown;
   winner_ = Winner::None;
@@ -909,6 +1144,16 @@ bool LichessClient::drawOfferedToUs() const {
   return ourColor_ == chess::Color::White ? blackDrawOffer_ : whiteDrawOffer_;
 }
 
+bool LichessClient::drawOfferedByUs() const {
+  return ourColor_ == chess::Color::White ? whiteDrawOffer_ : blackDrawOffer_;
+}
+
+int32_t LichessClient::claimWinRemainingSeconds() const {
+  if (!opponentGone_ || claimWinInSeconds_ < 0) return -1;
+  const uint32_t gone = (transport_.millis() - goneAtMs_) / 1000u;
+  return gone >= static_cast<uint32_t>(claimWinInSeconds_) ? 0 : claimWinInSeconds_ - static_cast<int32_t>(gone);
+}
+
 bool LichessClient::sendMove(const char* uci) {
   if (state_ != ClientState::Playing || gameId_[0] == '\0') {
     setError(ClientError::Protocol, "there is no game to move in");
@@ -924,13 +1169,23 @@ bool LichessClient::sendMove(const char* uci) {
     setError(ClientError::Protocol, "the request does not fit");
     return false;
   }
-  // Kept until the server accepts it, so a 429 can send exactly this move again.
+  // Kept until the server accepts or refuses it, so it can go out again exactly as it was: after
+  // a 429, after a network failure, or when another request still holds the slot.
+  const bool again = queuedMove_[0] != '\0' && sameText(queuedMove_, uci);
+  if (!again) queuedAtPly_ = game_.plyCount();
   copyText(queuedMove_, sizeof queuedMove_, uci);
   moveRejected_ = false;
+  // Another request of ours holds the slot (a draw offer, say): the move simply waits for it,
+  // and poll() sends it the moment the slot is free. Nothing has gone wrong, so nothing is said.
+  if (pending_ != Pending::None) {
+    bump();
+    return true;
+  }
   if (!startRequest(Pending::Move, Method::Post, path_, nullptr)) {
-    // A 429 backoff keeps the move queued; anything else drops it.
-    if (error_ != ClientError::RateLimited) queuedMove_[0] = '\0';
-    return false;
+    // Queued all the same: poll() sends it once the backoff or the network allows.
+    if (error_ != ClientError::RateLimited) armMoveRetry();
+    bump();
+    return true;
   }
   return true;
 }

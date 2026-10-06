@@ -161,7 +161,7 @@ bool parseEvent(const char* line, int length, Event& out) {
     if (statusName[0] != '\0') g.status = parseStatus(statusName);
     g.winner = readWinner(game);
     const JsonObject compat = game.object("compat");
-    if (compat.valid()) compat.boolean("board", g.compatBoard);
+    if (compat.valid()) g.compatKnown = compat.boolean("board", g.compatBoard);
     return g.id[0] != '\0';
   }
 

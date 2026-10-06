@@ -26,7 +26,9 @@ class FakeTransport : public arrocco::lichess::Transport {
   struct Stream {
     bool open = false;
     bool dead = false;  // readStream returns -1 once the pending bytes are gone
+    bool post = false;  // opened with openPostStream()
     char path[kPathSize] = {};
+    char body[kBodySize] = {};
     char data[kStreamCapacity] = {};
     int length = 0;
     int taken = 0;
@@ -39,6 +41,9 @@ class FakeTransport : public arrocco::lichess::Transport {
   void setChunkSize(int bytes) { chunkSize_ = bytes; }
   // How long beginRequest() stays Busy before it answers.
   void setRequestDelay(uint32_t ms) { requestDelayMs_ = ms; }
+  // Whether supportsPostStreams() says yes (the device and the simulator do; off by default, as
+  // the seam's own default).
+  void setPostStreams(bool on) { postStreams_ = on; }
   void failOpenStream(bool on) {
     failOpenStream_ = on;
     refusalStatus_ = 0;
@@ -82,6 +87,21 @@ class FakeTransport : public arrocco::lichess::Transport {
   bool streamIsOpen(int id) const {
     const Stream* s = stream(id);
     return s != nullptr && s->open;
+  }
+  bool streamIsPost(int id) const {
+    const Stream* s = stream(id);
+    return s != nullptr && s->open && s->post;
+  }
+  const char* streamBody(int id) const {
+    const Stream* s = stream(id);
+    return s != nullptr ? s->body : "";
+  }
+  // The id of the open stream on `path`, or kNoStream.
+  int streamOn(const char* path) const {
+    for (int i = 0; i < kMaxStreams; ++i) {
+      if (streams_[i].open && std::strcmp(streams_[i].path, path) == 0) return i + 1;
+    }
+    return kNoStream;
   }
   int streamOpenCalls() const { return streamOpenCalls_; }
 
@@ -141,21 +161,12 @@ class FakeTransport : public arrocco::lichess::Transport {
 
   int lastStreamStatus() const override { return streamStatus_; }
 
-  int openStream(const char* path) override {
-    ++streamOpenCalls_;
-    streamStatus_ = 0;
-    if (failOpenStream_) {
-      streamStatus_ = refusalStatus_;
-      return kNoStream;
-    }
-    for (int i = 0; i < kMaxStreams; ++i) {
-      if (streams_[i].open) continue;
-      streams_[i] = Stream();
-      streams_[i].open = true;
-      copyInto(streams_[i].path, kPathSize, path);
-      return i + 1;
-    }
-    return kNoStream;
+  int openStream(const char* path) override { return open(path, nullptr, false); }
+
+  bool supportsPostStreams() const override { return postStreams_; }
+  int openPostStream(const char* path, const char* body) override {
+    if (!postStreams_) return kNoStream;
+    return open(path, body, true);
   }
 
   int readStream(int id, char* out, int outSize) override {
@@ -184,6 +195,25 @@ class FakeTransport : public arrocco::lichess::Transport {
       for (; text[i] != '\0' && i + 1 < outSize; ++i) out[i] = text[i];
     }
     out[i] = '\0';
+  }
+
+  int open(const char* path, const char* body, bool post) {
+    ++streamOpenCalls_;
+    streamStatus_ = 0;
+    if (failOpenStream_) {
+      streamStatus_ = refusalStatus_;
+      return kNoStream;
+    }
+    for (int i = 0; i < kMaxStreams; ++i) {
+      if (streams_[i].open) continue;
+      streams_[i] = Stream();
+      streams_[i].open = true;
+      streams_[i].post = post;
+      copyInto(streams_[i].path, kPathSize, path);
+      copyInto(streams_[i].body, kBodySize, body);
+      return i + 1;
+    }
+    return kNoStream;
   }
 
   Stream* stream(int id) { return id >= 1 && id <= kMaxStreams ? &streams_[id - 1] : nullptr; }
@@ -235,6 +265,7 @@ class FakeTransport : public arrocco::lichess::Transport {
   uint32_t startedMs_ = 0;
   uint32_t requestDelayMs_ = 0;
   bool failOpenStream_ = false;
+  bool postStreams_ = false;
 };
 
 }  // namespace arrocco_test
