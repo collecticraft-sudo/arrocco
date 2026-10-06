@@ -39,7 +39,7 @@ The first board was assembled and brought up on 6 October 2026. On the real hard
 - it sleeps after five minutes untouched and wakes on a tap, with the radio off unless something needs it;
 - a game survives a power cut: it is saved after every move and offered again as "Resume game".
 
-Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). Next: the puzzle and Lichess screens, the case.
+Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). Next: the Lichess screens, the case. The offline puzzles are built and tested in the simulator, and wait for their first run on the board.
 
 ## Hardware
 
@@ -84,6 +84,7 @@ The tests need only a C++17 compiler. The simulator also needs Python 3 (no pack
 ```sh
 make -C test/chess test     # rules library tests (perft)
 make -C test/savegame test  # the saved game: round trips, and every corrupt blob refused
+make -C test/puzzles test   # the puzzle pack, the puzzle rating and every puzzle solved
 sim/run.sh                  # build, start the local server, open the page
 ```
 

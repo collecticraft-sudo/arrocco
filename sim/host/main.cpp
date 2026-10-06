@@ -221,21 +221,26 @@ void handleLine(Session& s, const InputLine& input) {
 
 int main(int argc, char** argv) {
   bool virtualTime = false;
+  bool wake = false;
   const char* stateDir = nullptr;
   for (int i = 1; i < argc; ++i) {
     if (strcmp(argv[i], "--virtual-time") == 0) {
       virtualTime = true;
+    } else if (strcmp(argv[i], "--wake") == 0) {
+      wake = true;
     } else if (strcmp(argv[i], "--state") == 0 && i + 1 < argc) {
       stateDir = argv[++i];
     } else {
       fprintf(stderr,
-              "usage: arrocco-sim [--virtual-time] [--state DIR]\n"
+              "usage: arrocco-sim [--virtual-time] [--state DIR] [--wake]\n"
               "Runs the Arrocco app on a simulated 800x480 e-ink panel and speaks a line\n"
               "protocol on stdin/stdout (see sim/host/protocol.h). Normally started by\n"
               "sim/server.py; sim/run.sh does everything.\n"
               "  --state DIR   the board's flash (the saved game) lives in DIR, so that\n"
               "                ending this process is a power cut and the next start\n"
-              "                offers \"Resume game\". Without it every start is a new board.\n");
+              "                offers \"Resume game\". Without it every start is a new board.\n"
+              "  --wake        this start is a touch waking the board from a sleep that\n"
+              "                began with a board on the glass: back to it, not the menu.\n");
       return strcmp(argv[i], "--help") == 0 ? 0 : 2;
     }
   }
@@ -257,6 +262,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
+  if (wake) arrocco_sim::prepareWake();
   out.hello(arrocco_sim::appName(), virtualTime);
   platform.reportState();
 

@@ -332,7 +332,7 @@ power::Blockers blockers(uint32_t now) {
   b.clockRunning = clock.enabled() && clock.running() && !clock.timedOut(clock.runningSide(), now);
   b.network = net::wifiBusy();
   b.cannotWake = !gt911::canWake();
-  b.gameOnScreen = s_app.currentScreen() == arrocco::ui::ScreenId::Game && !s_app.game().isOver();
+  b.gameOnScreen = s_app.boardOnScreen(); // an unfinished game or a puzzle: it stays on the glass
   return b;
 }
 

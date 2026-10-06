@@ -88,7 +88,12 @@ In flash: 138.741 byte di dati più 2.122 byte di lettore e 723 di etichette,
 cioè 141.586 byte in tutto, e zero RAM (`xtensa-esp32-elf-size`: tutto `text`,
 `data` e `bss` a zero).
 
-## Che cosa offre il lettore a una futura schermata
+Da quando la modalità puzzle c'è, il pacchetto entra davvero nel firmware: con
+la schermata, il rating e la sessione il firmware `arrocco` cresce di 155.240
+byte di flash e 688 byte di RAM (`pio run -e arrocco`, 6 ottobre 2026: flash da
+1.673.741 a 1.828.981 byte, RAM da 190.712 a 191.400).
+
+## Che cosa offre il lettore
 
 `lib/arrocco/src/arrocco/puzzles/puzzles.h`, namespace `arrocco::puzzles`:
 niente heap, niente STL, niente UI. Come Lichess, il pacchetto conserva la
@@ -113,13 +118,45 @@ mossa, quindi la schermata vede già la posizione giusta.
   Quando la soluzione dà matto, `isCorrect()` accetta qualunque altro matto,
   come fa Lichess.
 
+## La modalità puzzle
+
+Il pulsante "Puzzles" del menu. Che cosa vede e fa chi risolve, e perché, è in
+`docs/decisioni.md` (sezione "Gioco"); qui c'è come è fatta. Tre file in
+`lib/arrocco/src/arrocco/ui/`, dal più astratto:
+
+- `puzzle_progress.h/.cpp` — il rating (Glicko-1, un puzzle per periodo, con il
+  rating Lichess del puzzle come avversario), la scelta del prossimo puzzle e il
+  blob che tiene tutto. La scelta usa l'ordinamento del pacchetto: la fascia di
+  100 punti del rating cercato è un blocco di indici (`lowerBoundByRating()` due
+  volte), e il k-esimo puzzle della fascia è `inizio + (k · passo + scarto) mod
+  n`, con un passo primo che non divide `n` e uno scarto ricavato dal seme della
+  scacchiera. È una permutazione della fascia: niente lista di puzzle visti,
+  solo un contatore per fascia (32 fasce, 64 byte). Il blob: 98 byte, magic
+  "ARPZ", versione 1, CRC-32 come `saved_game.h`, e l'impronta FNV-1a dell'indice
+  del pacchetto, così un pacchetto rigenerato non fa riprendere un puzzle
+  sbagliato (tiene rating e conteggi, lascia puzzle e percorsi).
+- `puzzle_session.h/.cpp` — un puzzle alla volta, sopra `Cursor`: la mossa
+  dell'avversario ancora da mostrare (l'errore iniziale, poi ogni risposta), le
+  mosse di chi risolve, la mossa sbagliata, Hint, Solution, Skip, Retry, e il
+  punteggio, deciso una volta per puzzle. Niente disegno e niente orologio: per
+  questo il test nativo ci fa passare tutti i puzzle.
+- `puzzle_screen.h/.cpp` — la schermata: scacchiera e colonna laterale, il
+  picker del livello, i tocchi, il ritardo di 0,7 s prima della mossa
+  dell'avversario (`kPuzzleOpponentDelayMs` in `layout.h`), e la scrittura del
+  blob dopo ogni refresh che lo cambia (`ChessApp::present()` chiama
+  `persist()`, `begin()` chiama `restore()`).
+
+La citazione del database c'è dove si vedono i puzzle: in fondo al picker del
+livello ("Puzzles from the Lichess puzzle database, CC0") e, per ogni puzzle,
+il suo indirizzo `lichess.org/training/<id>` nella colonna laterale.
+
 ## Il test
 
 ```sh
 make -C test/puzzles test
 ```
 
-Sono due programmi.
+Sono tre programmi.
 
 `build/pack` controlla **tutti** e 3500 i puzzle contro le righe CSV originali
 (`test/puzzles/puzzle_reference.h`, i campi grezzi del CSV) e contro le nostre
@@ -141,6 +178,31 @@ dal pacchetto sarebbe un errore di segmentazione sulla pagina di guardia — e c
 la guardia funzioni davvero è la prima cosa che il test verifica. I buffer che il
 chiamante passa sono circondati da muri di 0xAB, così si vede anche una scrittura
 di troppo. **11.839.911 controlli, 0 fallimenti**, in meno di due secondi.
+
+`build/session` prova la modalità puzzle senza schermo. Il rating contro valori
+calcolati a parte (Python, dalle stesse formule), i suoi limiti e il suo verso
+su tutta la griglia di rating, deviazioni e puzzle; sei solutori simulati di
+forza nota, dal bambino principiante al giocatore forte di circolo, che dopo 40
+puzzle il rating deve aver trovato (anche partendo da un livello scelto 500
+punti più in alto o più in basso). Ogni percorso di ogni fascia è una
+permutazione della fascia e ricomincia solo dopo averla finita. Il blob: andata
+e ritorno, ogni bit girato, ogni lunghezza, ogni campo fuori misura, un altro
+pacchetto. Poi la sessione: **tutti** e 3500 i puzzle risolti mossa per mossa,
+con le risposte e il SAN di ogni mossa mostrata; su un campione la mossa
+sbagliata (contata una volta sola), Hint (mezzo punto), Solution fino in fondo,
+Skip, Retry, un taglio della corrente a metà puzzle che non deve né perdere la
+mossa né contare due volte il punteggio, i matti diversi da quello del
+pacchetto (accettati) e il pezzo di promozione sbagliato (rifiutato).
+**139.062 controlli, 0 fallimenti**, in mezzo secondo.
+
+La schermata vera si prova sul simulatore con `test/ui/puzzle_session.py`
+(dopo `sim/build.sh`): risolve un puzzle leggendo la soluzione da
+`puzzle_reference.h` all'indice che la scacchiera ha scritto nella sua flash,
+ne sbaglia uno cercando la mossa come una persona (tocca un pezzo, guarda i
+pallini), usa Hint, Solution, Retry, Skip, Next e Level, toglie la corrente a
+metà puzzle e controlla che torni alla stessa mossa, e con `arrocco-sim --wake`
+che il risveglio sul puzzle torni al puzzle. Un frame per tocco, niente oltre il
+bordo della colonna, la flash scritta solo dopo un refresh. **256 controlli.**
 
 ```sh
 make -C test/puzzles sanitize   # gli stessi test sotto UndefinedBehaviorSanitizer

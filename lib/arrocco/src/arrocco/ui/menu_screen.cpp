@@ -54,7 +54,7 @@ void MenuScreen::draw(Adafruit_GFX& gfx) {
   drawButton(gfx, menuButtonRect(kSlotTwoPlayers), Font::Bold12, str::kMenuTwoPlayers);
   drawButton(gfx, menuButtonRect(kSlotEngine), Font::Bold12, str::kMenuEngine, ctx_.engineAvailable(),
              ctx_.engineAvailable() ? nullptr : str::kEngineMissing);
-  drawButton(gfx, menuButtonRect(kSlotPuzzles), Font::Bold12, str::kMenuPuzzles, false, str::kComingSoon);
+  drawButton(gfx, menuButtonRect(kSlotPuzzles), Font::Bold12, str::kMenuPuzzles);
   drawButton(gfx, menuButtonRect(kSlotLichess), Font::Bold12, str::kMenuLichess, false, str::kComingSoon);
   drawButton(gfx, menuButtonRect(kSlotSettings), Font::Bold12, str::kMenuSettings);
 
@@ -87,6 +87,8 @@ Action MenuScreen::onTap(int16_t x, int16_t y) {
     case kSlotEngine:
       if (!ctx_.engineAvailable()) return Action::none();
       return Action::go(ScreenId::EngineSetup);
+    case kSlotPuzzles:
+      return Action::go(ScreenId::Puzzle);
     case kSlotSettings:
       return Action::go(ScreenId::Settings);
     default:

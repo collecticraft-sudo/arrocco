@@ -25,6 +25,7 @@
 #include "arrocco/ui/game_over_screen.h"
 #include "arrocco/ui/game_screen.h"
 #include "arrocco/ui/menu_screen.h"
+#include "arrocco/ui/puzzle_screen.h"
 #include "arrocco/ui/saved_game.h"
 #include "arrocco/ui/screen.h"
 
@@ -42,8 +43,9 @@ class ChessApp final : public arrocco::App {
   // begin() then does not offer a saved game against the engine.
   void setEngine(Engine* engine) { ctx_.engine = engine; }
 
-  // Call before begin(): a touch woke the board from a sleep that began on the game screen.
-  // begin() then goes straight back to the saved game instead of the menu.
+  // Call before begin(): a touch woke the board from a sleep that began on the game screen
+  // (or on a puzzle, see boardOnScreen()). begin() then goes straight back to the saved game,
+  // or to the puzzle, instead of the menu.
   void wakeIntoGame() { wakeIntoGame_ = true; }
 
   void begin() override;
@@ -58,6 +60,11 @@ class ChessApp final : public arrocco::App {
   // game clock counts down, and no tap replayed after a refresh while a popup covers the board.
   const GameClock& clock() const { return ctx_.clock; }
   bool gamePopupOpen() const { return game_screen_.popupOpen(); }
+  // A board someone may be thinking about is on the glass: an unfinished game, or a puzzle.
+  // The sleep then keeps it in view, and the wake comes back to it (src/app/power.h).
+  bool boardOnScreen() const {
+    return (screenId_ == ScreenId::Game && !game_.isOver()) || (screenId_ == ScreenId::Puzzle && puzzle_.showsBoard());
+  }
 
  private:
   Screen& current();
@@ -78,6 +85,7 @@ class ChessApp final : public arrocco::App {
   EngineSetupScreen engineSetup_;
   GameScreen game_screen_;
   GameOverScreen gameOver_;
+  PuzzleScreen puzzle_;
   ScreenId screenId_ = ScreenId::Menu;
   bool wakeIntoGame_ = false;
 
