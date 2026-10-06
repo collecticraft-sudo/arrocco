@@ -812,6 +812,336 @@ void testNetworkFailure() {
   delete f;
 }
 
+
+// ---------------------------------------------------------------------- what the screens rely on
+
+const char* const kStateE4 =
+    "{\"type\":\"gameState\",\"moves\":\"e2e4\",\"wtime\":178000,\"btime\":180000,"
+    "\"winc\":2000,\"binc\":2000,\"status\":\"started\"}\n";
+const char* const kStateE4E5 =
+    "{\"type\":\"gameState\",\"moves\":\"e2e4 e7e5\",\"wtime\":178000,\"btime\":179000,"
+    "\"winc\":2000,\"binc\":2000,\"status\":\"started\"}\n";
+
+int countPaths(const FakeTransport& t, const char* path) {
+  int n = 0;
+  for (int i = 0; i < t.requestCount() && i < FakeTransport::kMaxAnswers; ++i) {
+    if (std::strcmp(t.pathAt(i), path) == 0) ++n;
+  }
+  return n;
+}
+
+// A move whose POST fails on the network is kept, and goes out again a moment later — once.
+void testMoveRetriedAfterNetworkFailure() {
+  Fixture* f = playing();
+  f->transport.answerFailure();
+  CHECK(f->client.sendMove("e2e4"), "the move is accepted for delivery");
+  f->pump();
+  CHECK_STR(f->client.queuedMove(), "e2e4", "the move is still waiting to go out");
+  CHECK(!f->client.moveInFlight(), "nothing is in flight after the failure");
+  const int requests = f->transport.requestCount();
+  f->pump(10);
+  CHECK_INT(f->transport.requestCount(), requests, "no retry in a tight loop");
+  f->transport.answer(200, "{\"ok\":true}");
+  f->transport.advance(LichessClient::kMoveRetryDelayMs + 10);
+  f->pump();
+  CHECK_INT(f->transport.requestCount(), requests + 1, "one retry after the delay");
+  CHECK_INT(countPaths(f->transport, "/api/board/game/abcd1234/move/e2e4"), 2, "the same move, twice in all");
+  CHECK_STR(f->client.queuedMove(), "", "accepted: nothing left to send");
+  f->transport.push(f->gameStreamId(), kStateE4);
+  f->pump();
+  CHECK_INT(f->game.plyCount(), 1, "the board shows it once");
+  CHECK_STR(f->client.lastError(), "", "and the failure is no longer on the screen");
+  delete f;
+}
+
+// The POST times out on our side but did reach Lichess: the echo shows the move on the board,
+// and it is never sent a second time.
+void testTimedOutMoveThatArrived() {
+  Fixture* f = playing();
+  f->transport.setRequestDelay(60000);
+  CHECK(f->client.sendMove("e2e4"), "the move goes out");
+  f->pump();
+  CHECK(f->client.moveInFlight(), "in flight");
+  // The keep-alives go on meanwhile on both streams: the connection itself is fine.
+  for (uint32_t t = 0; t < LichessClient::kRequestTimeoutMs + 100; t += 7000) {
+    f->transport.advance(7000);
+    f->transport.push(f->eventStreamId(), "\n");
+    f->transport.push(f->gameStreamId(), "\n");
+    f->pump();
+  }
+  CHECK(!f->client.moveInFlight(), "given up on after the timeout");
+  CHECK_STR(f->client.queuedMove(), "e2e4", "but kept");
+  f->transport.setRequestDelay(0);
+  f->transport.push(f->gameStreamId(), kStateE4);
+  f->pump();
+  CHECK_INT(f->game.plyCount(), 1, "the server had it after all");
+  CHECK_STR(f->client.queuedMove(), "", "so nothing is left to send");
+  const int requests = f->transport.requestCount();
+  f->transport.advance(LichessClient::kMoveRetryDelayMs * 3);
+  f->pump(5);
+  CHECK_INT(f->transport.requestCount(), requests, "and it is not sent again");
+  delete f;
+}
+
+// The echo arrives while the POST is still out, and the POST then comes back refused (it was a
+// resend that crossed its own success): the move is on the board, no rejection is reported.
+void testRefusalOfAMoveAlreadyPlayed() {
+  Fixture* f = playing();
+  f->transport.setRequestDelay(1000);
+  f->transport.answer(400, "{\"error\":\"Not your turn, or game already over\"}");
+  CHECK(f->client.sendMove("e2e4"), "the move goes out");
+  f->transport.push(f->gameStreamId(), kStateE4);
+  f->pump();
+  CHECK_INT(f->game.plyCount(), 1, "the echo moved the board");
+  CHECK(f->client.moveInFlight(), "the POST is still out");
+  f->transport.advance(1100);
+  f->pump();
+  CHECK(!f->client.lastMoveRejected(), "a refusal of a move the board shows is not a rejection");
+  CHECK(f->client.error() == ClientError::None, "and nothing is reported");
+  CHECK_STR(f->client.queuedMove(), "", "nothing is queued");
+  delete f;
+}
+
+// A move tapped while another request of ours holds the slot waits for it, silently.
+void testMoveWaitsForTheSlot() {
+  Fixture* f = playing();
+  f->transport.setRequestDelay(1000);
+  f->transport.answer(200, "{\"ok\":true}");
+  CHECK(f->client.offerDraw(), "a draw offer is out");
+  CHECK(f->client.sendMove("e2e4"), "the move is taken all the same");
+  CHECK(f->client.error() == ClientError::None, "without an error on the screen");
+  CHECK_STR(f->client.queuedMove(), "e2e4", "it waits");
+  f->transport.answer(200, "{\"ok\":true}");
+  f->transport.advance(1100);
+  f->pump();
+  f->transport.advance(1100);
+  f->pump();
+  CHECK_INT(countPaths(f->transport, "/api/board/game/abcd1234/move/e2e4"), 1, "then goes out, once");
+  CHECK_STR(f->client.queuedMove(), "", "and is accepted");
+  delete f;
+}
+
+// A friend challenge on a transport that can keep it alive: a POST stream, the challenge's id
+// from its first line, and the game from {"done":"accepted"}.
+void testKeptAliveChallenge() {
+  Fixture* f = connected();
+  f->transport.setPostStreams(true);
+  const int requests = f->transport.requestCount();
+  CHECK(f->client.challengeUser("Amico", true, 600, 0, Color::White, true), "the challenge goes out");
+  CHECK_INT(f->transport.requestCount(), requests, "as a stream, not as a request");
+  const int id = f->transport.streamOn("/api/challenge/Amico");
+  CHECK(id != Transport::kNoStream && f->transport.streamIsPost(id), "a POST stream on the user's path");
+  CHECK(std::strstr(f->transport.streamBody(id), "keepAliveStream=true") != nullptr, "kept alive");
+  CHECK(std::strstr(f->transport.streamBody(id), "rated=true") != nullptr, "rated, as asked");
+  CHECK(std::strstr(f->transport.streamBody(id), "clock.limit=600") != nullptr, "with the clock");
+  CHECK(f->client.state() == ClientState::Challenging, "waiting for the answer");
+  f->transport.push(id, "{\"challenge\":{\"id\":\"Q8vx2Lk1\",\"status\":\"created\",\"rated\":true}}\n");
+  f->pump();
+  CHECK_STR(f->client.outgoingChallengeId(), "Q8vx2Lk1", "its id from the first line");
+  // A silent minute is fine: nothing is said on this stream until the friend answers.
+  f->transport.push(f->eventStreamId(), "\n");
+  f->transport.advance(25000);
+  f->transport.push(f->eventStreamId(), "\n");
+  f->pump();
+  CHECK(f->transport.streamIsOpen(id), "silence does not close it");
+  CHECK(f->client.state() == ClientState::Challenging, "still waiting");
+  f->transport.push(id, "{\"done\":\"accepted\"}\n");
+  f->pump();
+  CHECK(f->client.state() == ClientState::Playing, "accepted: the game is on");
+  CHECK_STR(f->client.gameId(), "Q8vx2Lk1", "the game has the challenge's id");
+  CHECK(f->transport.streamOn("/api/challenge/Amico") == Transport::kNoStream, "the challenge stream is closed");
+  CHECK(f->transport.streamOn("/api/board/game/stream/Q8vx2Lk1") != Transport::kNoStream, "the game stream is open");
+  // The event stream's own gameStart for it changes nothing.
+  f->transport.push(f->eventStreamId(),
+                    "{\"type\":\"gameStart\",\"game\":{\"gameId\":\"Q8vx2Lk1\",\"color\":\"black\","
+                    "\"opponent\":{\"username\":\"Amico\"},\"speed\":\"rapid\",\"rated\":true,"
+                    "\"compat\":{\"board\":true}}}\n");
+  f->pump();
+  CHECK_STR(f->client.gameId(), "Q8vx2Lk1", "still the same game");
+  delete f;
+
+  // Declined, and lost with the connection: back to Idle, with the reason.
+  Fixture* g = connected();
+  g->transport.setPostStreams(true);
+  CHECK(g->client.challengeUser("Amico", false, 600, 0, Color::White, true), "a second challenge");
+  int cid = g->transport.streamOn("/api/challenge/Amico");
+  g->transport.push(cid, "{\"id\":\"Q8vx2Lk2\"}\n{\"done\":\"declined\"}\n");
+  g->pump();
+  CHECK(g->client.state() == ClientState::Idle, "declined: idle again");
+  CHECK_STR(g->client.lastError(), "the challenge was declined", "and why");
+  CHECK(!g->transport.streamIsOpen(cid), "the stream is closed");
+  CHECK(g->client.challengeUser("Amico", false, 600, 0, Color::White, true), "a third challenge");
+  cid = g->transport.streamOn("/api/challenge/Amico");
+  g->transport.push(cid, "{\"id\":\"Q8vx2Lk5\"}\n");
+  g->pump();
+  g->transport.kill(cid);
+  g->pump();
+  CHECK(g->client.state() == ClientState::Idle, "lost with its connection: idle");
+  CHECK(std::strstr(g->client.lastError(), "lost") != nullptr, "and the screen can say so");
+  // Over before it said anything: Lichess refused it ("No such user" on the board).
+  CHECK(g->client.challengeUser("Nobody99", false, 600, 0, Color::White, true), "a challenge to nobody");
+  cid = g->transport.streamOn("/api/challenge/Nobody99");
+  g->transport.kill(cid);
+  g->pump();
+  CHECK(g->client.state() == ClientState::Idle, "refused: idle");
+  CHECK(g->client.error() == ClientError::Http, "an answer from Lichess, not a network failure");
+  CHECK_STR(g->client.lastError(), "Lichess refused the challenge", "said as such when the transport has no words");
+  delete g;
+
+  // Withdrawn by us: the stream closes and, its id being known, the challenge is cancelled.
+  Fixture* h = connected();
+  h->transport.setPostStreams(true);
+  CHECK(h->client.challengeUser("Amico", false, 600, 0, Color::White, true), "a challenge to withdraw");
+  cid = h->transport.streamOn("/api/challenge/Amico");
+  h->transport.push(cid, "{\"id\":\"Q8vx2Lk3\"}\n");
+  h->pump();
+  h->transport.answer(200, "{\"ok\":true}");
+  h->client.cancelOutgoing();
+  h->pump();
+  CHECK(h->client.state() == ClientState::Idle, "withdrawn: idle");
+  CHECK(!h->transport.streamIsOpen(cid), "the stream is closed");
+  CHECK_STR(h->transport.lastPath(), "/api/challenge/Q8vx2Lk3/cancel", "and the challenge cancelled");
+  delete h;
+
+  // Withdrawn before Lichess said its id: the stream stays until the id comes, then it is cancelled
+  // (closing it at once would leave the friend 20 s to accept a challenge nobody wants any more).
+  Fixture* k = connected();
+  k->transport.setPostStreams(true);
+  CHECK(k->client.challengeUser("Amico", false, 600, 0, Color::White, true), "a challenge withdrawn at once");
+  cid = k->transport.streamOn("/api/challenge/Amico");
+  const int before = k->transport.requestCount();
+  k->client.cancelOutgoing();
+  CHECK(k->client.state() == ClientState::Idle, "the screen is free at once");
+  CHECK(k->transport.streamIsOpen(cid), "the stream waits for the id");
+  CHECK_INT(k->transport.requestCount(), before, "nothing to cancel yet");
+  k->transport.answer(200, "{\"ok\":true}");
+  k->transport.push(cid, "{\"id\":\"Q8vx2Lk4\"}\n");
+  k->pump();
+  CHECK_STR(k->transport.lastPath(), "/api/challenge/Q8vx2Lk4/cancel", "cancelled as soon as its id came");
+  CHECK(k->transport.streamOn("/api/challenge/Amico") == Transport::kNoStream, "and the stream closed");
+  CHECK(k->client.state() == ClientState::Idle, "still idle");
+  delete k;
+}
+
+// What the event stream's replay is allowed to put on the board by itself.
+void testAutoFollowRules() {
+  Fixture* f = connected();
+  f->transport.push(f->eventStreamId(),
+                    "{\"type\":\"gameStart\",\"game\":{\"gameId\":\"bull1234\",\"color\":\"white\","
+                    "\"opponent\":{\"username\":\"Amico\"},\"speed\":\"bullet\",\"compat\":{\"board\":false}}}\n");
+  f->pump();
+  CHECK(f->client.state() == ClientState::Idle, "a game the Board API refuses is not followed");
+  f->transport.push(f->eventStreamId(),
+                    "{\"type\":\"gameStart\",\"game\":{\"gameId\":\"corr1234\",\"color\":\"white\","
+                    "\"opponent\":{\"username\":\"Amico\"},\"speed\":\"correspondence\","
+                    "\"compat\":{\"board\":true}}}\n");
+  f->pump();
+  CHECK(f->client.state() == ClientState::Idle, "nor a correspondence game");
+  // The same correspondence game, once we accepted its challenge, is ours.
+  f->transport.answer(200, "{\"ok\":true}");
+  CHECK(f->client.acceptChallenge("corr1234"), "accept");
+  f->pump();
+  f->transport.push(f->eventStreamId(),
+                    "{\"type\":\"gameStart\",\"game\":{\"gameId\":\"corr1234\",\"color\":\"white\","
+                    "\"opponent\":{\"username\":\"Amico\"},\"speed\":\"correspondence\","
+                    "\"compat\":{\"board\":true}}}\n");
+  f->pump();
+  CHECK(f->client.state() == ClientState::Playing, "the game we accepted is followed");
+  CHECK_STR(f->client.gameId(), "corr1234", "and it is that one");
+  delete f;
+
+  // An event without "compat" at all is not a refusal.
+  Fixture* g = connected();
+  g->transport.push(g->eventStreamId(),
+                    "{\"type\":\"gameStart\",\"game\":{\"gameId\":\"rapi1234\",\"color\":\"black\","
+                    "\"opponent\":{\"username\":\"Amico\"},\"speed\":\"rapid\"}}\n");
+  g->pump();
+  CHECK(g->client.state() == ClientState::Playing, "a real-time game with no compat is followed");
+  delete g;
+}
+
+void testWhatTheScreensRead() {
+  Fixture* bad = new Fixture();
+  bad->transport.answer(401, "{\"error\":\"No such token\"}");
+  bad->client.begin();
+  bad->pump();
+  CHECK_INT(bad->client.lastHttpStatus(), 401, "a refused token is a 401 the screen can recognise");
+  bad->transport.answer(200, kAccount);
+  bad->client.begin();
+  bad->pump();
+  CHECK_INT(bad->client.lastHttpStatus(), 0, "and a success clears it");
+  CHECK(!bad->client.eventConnected(), "the event stream is open but has said nothing yet");
+  bad->transport.push(bad->eventStreamId(), "\n");
+  bad->pump();
+  CHECK(bad->client.eventConnected(), "a keep-alive is enough to call it live");
+  delete bad;
+
+  Fixture* f = playing();
+  CHECK(f->client.gameConnected(), "the game stream delivered its gameFull: live");
+  f->transport.kill(f->gameStreamId());
+  f->pump();
+  CHECK(!f->client.gameConnected(), "a dead game stream is not live");
+  f->transport.advance(LichessClient::kReconnectDelayMs + 100);
+  f->pump();
+  CHECK(!f->client.gameConnected(), "reopened but silent: still reconnecting");
+  f->transport.push(f->gameStreamId(), kStateE4E5);
+  f->pump();
+  CHECK(f->client.gameConnected(), "live again with the first line");
+  CHECK_STR(f->client.lastError(), "", "and the reconnect message is gone");
+
+  f->transport.push(f->gameStreamId(),
+                    "{\"type\":\"gameState\",\"moves\":\"e2e4 e7e5\",\"wtime\":1,\"btime\":1,\"winc\":0,"
+                    "\"binc\":0,\"status\":\"started\",\"wdraw\":true,\"bdraw\":false}\n");
+  f->pump();
+  CHECK(f->client.drawOfferedByUs(), "white (us) offered the draw");
+  CHECK(!f->client.drawOfferedToUs(), "nobody offered us one");
+
+  CHECK_INT(f->client.claimWinRemainingSeconds(), -1, "nothing to claim");
+  f->transport.push(f->gameStreamId(), "{\"type\":\"opponentGone\",\"gone\":true,\"claimWinInSeconds\":30}\n");
+  f->pump();
+  CHECK_INT(f->client.claimWinRemainingSeconds(), 30, "thirty seconds to wait");
+  f->transport.advance(12500);
+  CHECK_INT(f->client.claimWinRemainingSeconds(), 18, "counted down on our own clock");
+  f->transport.advance(40000);
+  CHECK_INT(f->client.claimWinRemainingSeconds(), 0, "then the win can be claimed");
+  delete f;
+}
+
+
+// The event stream's gameFinish overtakes the game stream's last state: the last move must still
+// reach the board, and the end must come even if that state never does.
+void testFinishOvertakesLastState() {
+  Fixture* f = playing();
+  f->transport.push(f->gameStreamId(), kStateE4E5);
+  f->pump();
+  f->transport.push(f->eventStreamId(), kGameFinish);   // resign, black wins
+  f->transport.push(f->eventStreamId(), "\n");
+  f->pump();
+  CHECK(f->client.state() == ClientState::Playing, "the game stream is live: its last state is awaited");
+  f->transport.push(f->gameStreamId(),
+                    "{\"type\":\"gameState\",\"moves\":\"e2e4 e7e5 d1h5\",\"wtime\":170000,\"btime\":179000,"
+                    "\"winc\":2000,\"binc\":2000,\"status\":\"resign\",\"winner\":\"black\"}\n");
+  f->pump();
+  CHECK(f->client.state() == ClientState::Finished, "then it ends");
+  CHECK_INT(f->game.plyCount(), 3, "with the last move on the board");
+  CHECK(f->client.winner() == Winner::Black, "and the right winner");
+  delete f;
+
+  Fixture* g = playing();
+  g->transport.push(g->eventStreamId(), kGameFinish);
+  g->transport.push(g->eventStreamId(), "\n");
+  g->pump();
+  CHECK(g->client.state() == ClientState::Playing, "waiting for the last state");
+  g->transport.advance(LichessClient::kFinishGraceMs + 100);
+  g->transport.push(g->gameStreamId(), "\n");
+  g->transport.push(g->eventStreamId(), "\n");
+  g->pump();
+  CHECK(g->client.state() == ClientState::Finished, "it never came: the event ends the game by itself");
+  CHECK(g->client.status() == GameStatus::Resign, "as the event said");
+  CHECK(g->client.winner() == Winner::Black, "with its winner");
+  delete g;
+}
+
 }  // namespace
 
 int main() {
@@ -834,6 +1164,14 @@ int main() {
   testChallenges();
   testGuards();
   testNetworkFailure();
+  testMoveRetriedAfterNetworkFailure();
+  testTimedOutMoveThatArrived();
+  testRefusalOfAMoveAlreadyPlayed();
+  testMoveWaitsForTheSlot();
+  testKeptAliveChallenge();
+  testAutoFollowRules();
+  testWhatTheScreensRead();
+  testFinishOvertakesLastState();
 
   std::printf("lichess offline: %d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;

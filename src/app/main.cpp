@@ -9,21 +9,31 @@
 // nothing running, the board shows its sleep screen and goes into deep sleep. A touch
 // wakes it, and a wake is a reboot through setup(). The radio is off unless a network
 // job needs it (net_wifi.h).
+//
+// Lichess (arrocco/ui/lichess_state.h): the online game's board and client live in PSRAM,
+// allocated in setup() like the engine's hash; the screens reach the network only through
+// net::transport() and DeviceAccount (lichess_link.h), whose work runs on the network tasks.
 #include <Arduino.h>
 #include <SPI.h>
+#include <esp_heap_caps.h>
 #include <stdlib.h>
+
+#include <new>
 
 #include "arrocco/ui/app.h"
 #include "arrocco/ui/layout.h"
+#include "arrocco/ui/lichess_state.h"
 #include "config.h"
 #include "esp32_engine.h"
 #include "esp32_platform.h"
 #include "gauge.h"
 #include "gt911.h"
 #include "i2cbus.h"
+#include "lichess_link.h"
 #include "log.h"
 #include "net_console.h"
 #include "net_http.h"
+#include "net_token.h"
 #include "net_wifi.h"
 #include "panel.h"
 #include "power.h"
@@ -57,6 +67,8 @@ constexpr uint8_t kMaxRefreshesPerCall = 4; // a replayed tap refreshes again: b
 Esp32Platform s_platform;
 arrocco::ui::ChessApp s_app(s_platform); // .bss: never on a task stack
                                          // the engine is attached in setup(): it needs PSRAM
+DeviceAccount s_lichessAccount;
+arrocco::ui::LichessState* s_lichess = nullptr; // in PSRAM, from setup()
 
 // Touch state machine (mirrors hwtest): Down on the first report with one finger, Move
 // while it stays down and the point moved, Up on the release report or when the reports
@@ -118,10 +130,12 @@ bool mapTouch(uint16_t rawX, uint16_t rawY, int16_t& outX, int16_t& outY) {
   return true;
 }
 
+// The board on the glass, the offline game's or the online one's: a tap made during a refresh
+// is replayed only when this board did not change under it (touch_policy.h).
 touch_policy::Snapshot snapshot() {
-  const arrocco::chess::Game& game = s_app.game();
-  return touch_policy::Snapshot{s_app.currentScreen() == arrocco::ui::ScreenId::Game, game.plyCount(),
-                                game.currentPly(), game.isOver(), s_app.gamePopupOpen()};
+  const arrocco::chess::Game& game = s_app.boardGame();
+  return touch_policy::Snapshot{s_app.boardShown(), game.plyCount(), game.currentPly(), game.isOver(),
+                                s_app.boardPopupOpen()};
 }
 
 void dispatch(arrocco::TouchEvent::Type type, int16_t x, int16_t y, uint32_t now) {
@@ -316,8 +330,8 @@ void retryTouch(uint32_t now) {
 
 bool tickDue(uint32_t now) {
   if (now - s_lastTickMs < kTickMs) return false;
-  const arrocco::ui::GameClock& clock = s_app.clock();
-  if (clock.running() && now - s_lastTouchMs < kTickQuietAfterTouchMs && now - s_lastTickMs < kTickMaxDeferMs)
+  // A clock on the glass, offline or online: the app's repaints wait for the second tap.
+  if (s_app.clockTicking() && now - s_lastTouchMs < kTickQuietAfterTouchMs && now - s_lastTickMs < kTickMaxDeferMs)
     return false;
   return true;
 }
@@ -442,6 +456,18 @@ void setup() {
   net::consoleAddCommands(power::consoleCommand, power::consoleHelp);
   net::consoleAddCommands(touch_tune::consoleCommand, touch_tune::consoleHelp);
   net::consoleAddCommands(touchStatsCommand, touchStatsHelp);
+
+  // Lichess: the online game's board (25 KB) and its client (9 KB) go to PSRAM. Without it the
+  // menu entry stays greyed, as it does for the engine.
+  void* lichessMemory = heap_caps_malloc(sizeof(arrocco::ui::LichessState), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (lichessMemory) {
+    s_lichess = new (lichessMemory) arrocco::ui::LichessState(net::transport(), s_lichessAccount);
+    s_app.setLichess(s_lichess);
+    logLine("LICH  ready: %u bytes in PSRAM, token %s", static_cast<unsigned>(sizeof(arrocco::ui::LichessState)),
+            net::tokenPresent() ? "present" : "absent");
+  } else {
+    logLine("LICH  no PSRAM for it: 'Lichess' stays greyed");
+  }
 
   const uint32_t now = millis();
   s_lastRetryMs = now;

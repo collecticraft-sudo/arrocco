@@ -39,7 +39,9 @@ The first board was assembled and brought up on 6 October 2026. On the real hard
 - it sleeps after five minutes untouched and wakes on a tap, with the radio off unless something needs it;
 - a game survives a power cut: it is saved after every move and offered again as "Resume game".
 
-Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). Next: the Lichess screens, the case. The offline puzzles are built and tested in the simulator, and wait for their first run on the board.
+Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). Next: the case. The offline puzzles are built and tested in the simulator, and wait for their first run on the board.
+
+The Lichess screens are written and tested in the simulator against a pretend Lichess (`sim/run.sh --fake-lichess`: no network, no account), but they have not run on the board yet: joining Wi-Fi with a QR code, linking the account with a QR code (OAuth PKCE, or a token pasted on the serial console), playing Lichess Stockfish, challenging a friend, accepting invitations, and the online game with the server's clocks. How it works, and how to try it on the board: [docs/rete.md](docs/rete.md).
 
 ## Hardware
 
@@ -66,6 +68,7 @@ Through-hole soldering only. Wiring and pin map: [docs/wiring.md](docs/wiring.md
 | `src/app/` | The device firmware: menu and games, the CT800 engine task, Wi-Fi and the Lichess client. |
 | `sim/` | Mac simulator. Run `sim/run.sh`. |
 | `test/chess/` | Native tests for the rules library. Run `make -C test/chess test`. |
+| `test/lichess/`, `test/lichess_ui/`, `test/ui/` | The Lichess client, the Lichess screens, and scripted simulator sessions. Offline only: `make -C test/lichess offline`, `make -C test/lichess_ui test`, `test/ui/lichess_session.py`. |
 | `assets/pieces/` | SVG sources for the CollectiCraft 1-bit piece set, with a template. |
 | `docs/` | Working notes, mostly in Italian. [docs/decisioni.md](docs/decisioni.md) is the source of truth for project decisions. |
 
@@ -97,7 +100,7 @@ A game in progress survives a power cut: the board keeps it in flash and offers 
 3. **Interface and two players** on the same board, with a clock. One screen refresh per event, few full-screen flashes.
 4. **Engine.** CT800 in its own task, speaking UCI. Named levels, from easy ones below 1000 Elo up to club strength.
 5. **Offline puzzles** from the Lichess puzzle database, stored in flash.
-6. **Lichess.** Login by QR code (OAuth PKCE), pasted token as a fallback. Play Lichess Stockfish, challenge a friend, accept invites. Casual games by default, rated on request.
+6. **Lichess.** Login by QR code (OAuth PKCE), pasted token as a fallback. Play Lichess Stockfish, challenge a friend, accept invites. Casual games by default, rated on request. Written and tested in the simulator; next, on the board.
 7. **Later:** take back, hints.
 8. **Release.** Tagged versions built by CI, with a browser flasher on GitHub Pages. No secure boot and no flash encryption: you can always install your own build.
 

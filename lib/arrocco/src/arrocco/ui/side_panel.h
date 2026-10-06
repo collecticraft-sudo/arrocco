@@ -23,6 +23,9 @@ struct SidePanelView {
   const char* subline = nullptr;            // "1. e4", "Check!", "Move 3 of 7", ...
   ClockView clock;
   const char* buttons[kSideButtonSlots] = {};  // nullptr = empty slot
+  // Who sits behind each clock, [White] and [Black]: nullptr = "White" / "Black". The online game
+  // puts the players' names here.
+  const char* clockLabels[2] = {nullptr, nullptr};
 };
 
 void drawSidePanel(Adafruit_GFX& gfx, const chess::Game& game, const SidePanelView& view);

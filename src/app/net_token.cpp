@@ -23,6 +23,7 @@ constexpr char kKeyToken[] = "token";
 constexpr char kClientId[] = "arrocco.local";
 constexpr char kScope[] = "board:play";
 constexpr char kCallbackPath[] = "/oauth/callback";
+constexpr char kLoginPath[] = "/login";   // what the QR code opens: a redirect to lichess.org
 
 constexpr size_t kVerifierLen = 64; // 43..128 per RFC 7636; 64 is comfortably inside
 // A login nobody finishes must not keep the radio and port 80 up for ever: after this
@@ -41,6 +42,7 @@ char s_verifier[kVerifierLen + 1] = {};
 char s_state[33] = {};
 char s_code[512] = {};    // the authorization code: as secret as the token, never logged
 char s_redirect[64] = {};
+char s_authUrl[400] = {};  // the authorize URL /login sends the phone to: no secret in it
 bool s_handlerRegistered = false;
 uint32_t s_waitingSinceMs = 0;
 
@@ -152,8 +154,26 @@ void fail(const char* why) {
   s_oauthState = OauthState::Failed;
   memset(s_verifier, 0, sizeof(s_verifier));
   memset(s_code, 0, sizeof(s_code));
+  s_authUrl[0] = '\0';
   wifiWebWindow(false); // nothing more is coming back to /oauth/callback
   logLine("OAUTH failed: %s", why);
+}
+
+// The QR code's address: the phone is sent on to lichess.org with the login's own URL (the
+// PKCE challenge and the state are public by design; the verifier never leaves the board).
+// Runs on the loop task inside WebServer::handleClient(): quick, no network.
+void handleLogin() {
+  WebServer& w = web();
+  if (s_oauthState != OauthState::Waiting || s_authUrl[0] == '\0') {
+    w.send(410, "text/html",
+           F("<!doctype html><meta charset=utf-8><p>This login link has expired. Start again "
+             "from the board.</p>"));
+    return;
+  }
+  w.sendHeader("Location", s_authUrl, true);
+  w.sendHeader("Cache-Control", "no-store");
+  w.send(302, "text/plain", "");
+  logLine("OAUTH the phone opened the login page: sent on to lichess.org");
 }
 
 // Runs on the loop task inside WebServer::handleClient(): quick, no network.
@@ -289,6 +309,7 @@ bool oauthBegin(char* urlOut, size_t urlSize) {
 
   if (!s_handlerRegistered) {
     web().on(kCallbackPath, handleCallback);
+    web().on(kLoginPath, handleLogin);
     s_handlerRegistered = true;
   }
 
@@ -301,6 +322,11 @@ bool oauthBegin(char* urlOut, size_t urlSize) {
     fail("the authorize URL does not fit");
     return false;
   }
+  if (strlen(urlOut) >= sizeof(s_authUrl)) {
+    fail("the authorize URL does not fit");
+    return false;
+  }
+  memcpy(s_authUrl, urlOut, strlen(urlOut) + 1);   // for /login, the QR code's address
   s_oauthError[0] = '\0';
   s_oauthState = OauthState::Waiting;
   s_waitingSinceMs = ::millis();
@@ -316,9 +342,18 @@ void oauthPoll(uint32_t now) {
   fail("the phone did not come back in time"); // closes the login window: the radio may go off
 }
 
+bool oauthLoginLink(char* out, size_t outSize) {
+  if (!out || outSize == 0) return false;
+  out[0] = '\0';
+  if (s_oauthState != OauthState::Waiting) return false;
+  const int n = snprintf(out, outSize, "http://%s%s", wifiIp().toString().c_str(), kLoginPath);
+  return n > 0 && static_cast<size_t>(n) < outSize;
+}
+
 void oauthCancel() {
   memset(s_verifier, 0, sizeof(s_verifier));
   memset(s_code, 0, sizeof(s_code));
+  s_authUrl[0] = '\0';
   s_oauthState = OauthState::Idle;
   s_oauthError[0] = '\0';
   wifiWebWindow(false);

@@ -52,12 +52,40 @@ EOF
   exit 1
 fi
 
+# The QR encoder of the Lichess screens (Project Nayuki's, packaged as wjtje/qr-code-generator-
+# library) is found the same way: PlatformIO downloads it for the arrocco environment.
+qr_dir=""
+if [ -n "${ARROCCO_QR_DIR:-}" ]; then
+  [ -f "$ARROCCO_QR_DIR/src/qrcodegen.c" ] || fail "ARROCCO_QR_DIR='$ARROCCO_QR_DIR' does not contain src/qrcodegen.c"
+  qr_dir="$(cd "$ARROCCO_QR_DIR" && pwd)"
+else
+  for candidate in "$REPO_DIR"/.pio/libdeps/*/qr-code-generator-library; do
+    [ -f "$candidate/src/qrcodegen.c" ] || continue
+    if [ -z "$qr_dir" ] || [ "$candidate/src/qrcodegen.c" -nt "$qr_dir/src/qrcodegen.c" ]; then
+      qr_dir="$candidate"
+    fi
+  done
+fi
+if [ -z "$qr_dir" ]; then
+  cat >&2 <<EOF
+sim/build.sh: the QR code library (qr-code-generator-library) was not found under
+    $REPO_DIR/.pio/libdeps/*/qr-code-generator-library
+PlatformIO downloads it with the firmware's libraries. Run this once, then try again:
+
+    cd "$REPO_DIR" && pio pkg install -e arrocco
+
+EOF
+  exit 1
+fi
+
 mkdir -p "$BUILD_DIR"
 # -n: replace the link itself instead of descending into the directory it points to.
 ln -sfn "$gfx_dir" "$BUILD_DIR/gfx"
+ln -sfn "$qr_dir" "$BUILD_DIR/qrcodegen"
 
 gfx_version="$(sed -n 's/^version=//p' "$gfx_dir/library.properties" 2>/dev/null | head -n 1)"
 printf 'sim/build.sh: Adafruit GFX %s <- %s\n' "${gfx_version:-unknown}" "$gfx_dir"
+printf 'sim/build.sh: QR code generator <- %s\n' "$qr_dir"
 
 jobs="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 # cd first and keep every path in the Makefile relative: make cannot handle spaces,

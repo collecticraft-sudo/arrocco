@@ -11,17 +11,19 @@ Arrocco itself is GPL-3.0-or-later (see [COPYING](COPYING)). This file lists wha
 | [Adafruit BusIO](https://github.com/adafruit/Adafruit_BusIO) | 1.17.4 | MIT | pulled in by Adafruit GFX; not used directly |
 | [Arduino core for ESP32](https://github.com/espressif/arduino-esp32) | 3.3.8 | LGPL-2.1 | Arduino framework |
 | [ESP-IDF](https://github.com/espressif/esp-idf) | 5.5.4 | Apache-2.0 | SDK under the Arduino core, linked as prebuilt libraries |
+| [QR Code generator](https://www.nayuki.io/page/qr-code-generator-library) (C) by Project Nayuki, packaged for PlatformIO as [wjtje/qr-code-generator-library](https://registry.platformio.org/libraries/wjtje/qr-code-generator-library) | 1.7.0 | MIT | the QR codes of the Lichess screens (Wi-Fi network, login) |
 
 How each licence was checked:
 
 - GxEPD2, Adafruit GFX and Adafruit BusIO: from the `LICENSE` / `license.txt` files PlatformIO installs under `.pio/libdeps/`.
+- QR Code generator: the MIT notice of Project Nayuki at the top of `qrcodegen.c` and `qrcodegen.h`, and the package's own `LICENSE` (MIT, by the packager, Wouter van der Wal) and `library.json`, as PlatformIO installs them under `.pio/libdeps/arrocco/qr-code-generator-library/`. The package is Nayuki's C library unchanged in its two files; only the `arrocco` environment uses it.
 - Arduino core and ESP-IDF: from their upstream repositories. The PlatformIO framework package ships without a top-level licence file. ESP-IDF also bundles components under other permissive licences (FreeRTOS, mbedTLS, lwIP and others); see its own notices.
 
 GxEPD2 is the reason the firmware is GPL-3.0 already. All the other licences above are compatible with it.
 
 **Fonts.** The interface uses the `FreeSans` bitmap fonts from the `Fonts/` folder of Adafruit GFX. They are generated from GNU FreeFont, which is GPL-3.0-or-later with a font exception. The Adafruit repository does not state this origin itself.
 
-**Simulator.** `sim/` compiles the same Adafruit GFX sources for the Mac. Its server uses only the Python standard library and its web page loads no external scripts.
+**Simulator.** `sim/` compiles the same Adafruit GFX and QR Code generator sources for the Mac. Its server uses only the Python standard library and its web page loads no external scripts. The test that reads the QR codes back (`test/ui/qr_decode.m`) uses Core Image, part of macOS: nothing is downloaded for it.
 
 ## Included in the repository
 

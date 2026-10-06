@@ -11,11 +11,16 @@
 //   * a game stream that dies mid-game: reopen, re-read "moves", replay only what is missing;
 //   * more than 20 s of silence (the keep-alive is every ~7 s): treat as dead, reconnect;
 //   * HTTP 429: stop asking for at least a minute, then retry the move that was refused;
+//   * a move that cannot go out (slot busy, network down, request timed out): kept and sent again
+//     a moment later, and dropped without a word once the board shows it was played after all,
+//     so a slow network can neither lose a move nor play it twice;
 //   * a move rejected by the server (not your turn, illegal): reported, board untouched;
 //   * opponentGone, with the seconds after which claim-victory becomes possible;
-//   * a stream that replays a game which is already over: seen as over, not as playable.
+//   * a stream that replays a game which is already over: seen as over, not as playable;
+//   * a challenge to a friend that Lichess would let expire after 20 s: sent on a stream that
+//     keeps it alive until the friend answers, when the transport can do that.
 //
-// No heap, no STL, no printf. About 7 KB of buffers, all members: put a LichessClient in a
+// No heap, no STL, no printf. About 9 KB of buffers, all members: put a LichessClient in a
 // long-lived object, never on the 8 KB Arduino loop stack.
 #pragma once
 #include <stdint.h>
@@ -50,11 +55,20 @@ class LichessClient {
   static constexpr uint32_t kSilenceTimeoutMs = 20000;
   static constexpr uint32_t kReconnectDelayMs = 2000;
   static constexpr uint32_t kRequestTimeoutMs = 20000;
+  // A move that could not go out is sent again after this long (never in a tight loop: on the
+  // simulator a dead proxy fails at once, and every poll would knock on it again).
+  static constexpr uint32_t kMoveRetryDelayMs = 2000;
+  // The event stream's gameFinish can overtake the game stream's last gameState (they are two
+  // connections): the board then waits this long for that state, which carries the last move,
+  // before it takes the end from the event alone.
+  static constexpr uint32_t kFinishGraceMs = 5000;
   static constexpr int kMaxChallenges = 4;
   // A gameState line of a 680-ply game still fits; past that the line is dropped, reported
   // through lastError(), and the board is left alone rather than half-applied.
   static constexpr int kGameLineSize = 4096;
   static constexpr int kEventLineSize = 1536;
+  // The first line of a kept-alive challenge is the challenge itself, the size of an event line.
+  static constexpr int kChallengeLineSize = 1536;
   static constexpr int kResponseSize = 1024;
 
   LichessClient(Transport& transport, chess::Game& game);
@@ -73,6 +87,9 @@ class LichessClient {
   bool busy() const { return pending_ != Pending::None; }
   // Milliseconds still to wait after a 429 (0 when not rate limited).
   uint32_t backoffRemainingMs() const;
+  // The HTTP status of the last answer that was not a success (401 for a token Lichess no longer
+  // knows, 404 for a user that does not exist), 0 after a success or when there was no answer.
+  int lastHttpStatus() const { return httpStatus_; }
 
   // ---------------------------------------------------------------- starting a game
   // level 1..8, clock in seconds. UNRATED by definition. color: Color::White/Black, or
@@ -82,15 +99,24 @@ class LichessClient {
   // refuse a faster clock rather than create a game that cannot be ended.
   bool startAiGame(int level, int clockLimitSeconds, int clockIncrementSeconds, chess::Color color,
                    bool randomColor = false);
+  // With a transport that supportsPostStreams() the challenge goes out on a stream that keeps it
+  // alive (keepAliveStream=true) until the friend accepts or declines, or until
+  // cancelOutgoing(); otherwise as a plain request, which Lichess expires after 20 s.
   bool challengeUser(const char* user, bool rated, int clockLimitSeconds, int clockIncrementSeconds,
                      chess::Color color, bool randomColor = true);
+  // Withdraws the challenge we sent: closes its stream and, once its id is known, cancels it.
+  void cancelOutgoing();
+  // The id of the challenge we sent or accepted and whose game has not started yet ("" if none).
+  const char* outgoingChallengeId() const { return pendingChallengeId_; }
   bool acceptChallenge(const char* id);
   bool declineChallenge(const char* id);
   bool cancelChallenge(const char* id);
   // Follow a game we already know about (an id from gameStart, or one we started).
   bool followGame(const char* id);
   // Whether a gameStart for an unknown game is followed by itself. On by default: it is how the
-  // event stream's replay of an ongoing game resumes play after a reboot.
+  // event stream's replay of an ongoing game resumes play after a reboot. Only real-time games
+  // the Board API can play are followed that way; a correspondence game, or one whose event says
+  // compat.board false, is left alone unless it is the one we challenged or accepted.
   void setAutoFollow(bool on) { autoFollow_ = on; }
 
   // ---------------------------------------------------------------- in the game
@@ -114,7 +140,17 @@ class LichessClient {
   bool opponentGone() const { return opponentGone_; }
   int32_t claimWinInSeconds() const { return claimWinInSeconds_; }
   bool drawOfferedToUs() const;
+  bool drawOfferedByUs() const;
   bool moveInFlight() const { return pending_ == Pending::Move; }
+  // The move sent with sendMove() that the server has neither accepted nor refused yet: in
+  // flight, or waiting to go out again. "" when there is none.
+  const char* queuedMove() const { return queuedMove_; }
+  // The game stream is open and has said something since it was (re)opened: the board is live.
+  bool gameConnected() const { return gameStream_ != Transport::kNoStream && gameHeard_; }
+  bool eventConnected() const { return eventStream_ != Transport::kNoStream && eventHeard_; }
+  // Seconds left before claimVictory() is allowed, counted from the opponentGone message (0 when
+  // it is allowed now, -1 when the opponent is not gone).
+  int32_t claimWinRemainingSeconds() const;
   bool lastMoveRejected() const { return moveRejected_; }
   int plyCount() const { return appliedPlies_; }
 
@@ -134,14 +170,20 @@ class LichessClient {
 
  private:
   enum class Pending : uint8_t {
-    None, Account, ChallengeAi, ChallengeUser, ChallengeAction, Move, Resign, Abort, DrawYes, DrawNo, ClaimVictory
+    None, Account, ChallengeAi, ChallengeUser, ChallengeAction, AcceptChallenge, Move, Resign, Abort, DrawYes, DrawNo,
+    ClaimVictory
   };
 
   bool startRequest(Pending kind, Method method, const char* path, const char* body);
   void pumpRequest(uint32_t now);
   void pumpEventStream(uint32_t now);
   void pumpGameStream(uint32_t now);
-  void feedLines(NdjsonReader& reader, const char* data, int size, bool isEvent);
+  enum class Lines : uint8_t { Event, Game, Challenge };
+  void feedLines(NdjsonReader& reader, const char* data, int size, Lines kind);
+  void pumpChallengeStream();
+  void handleChallengeLine(const char* line, int length);
+  void closeChallengeStream();
+  void outgoingEnded(ClientError kind, const char* text);
   void handleResponse(Pending kind, int status, int length);
   void handleEventLine(const char* line, int length);
   void handleGameLine(const char* line, int length);
@@ -162,7 +204,8 @@ class LichessClient {
   bool streamRateLimited();
   void bump() { ++revision_; }
   bool inBackoff(uint32_t now) const;
-  bool challengeActionRequest(const char* id, const char* action);
+  bool challengeActionRequest(const char* id, const char* action, Pending kind = Pending::ChallengeAction);
+  void armMoveRetry();
 
   Transport& transport_;
   chess::Game& game_;
@@ -180,14 +223,31 @@ class LichessClient {
   uint32_t gameRetryMs_ = 0;
   bool eventRetryArmed_ = false;
   bool gameRetryArmed_ = false;
+  bool eventHeard_ = false;     // a line (keep-alives included) arrived since the stream opened
+  bool gameHeard_ = false;
+  uint32_t moveRetryMs_ = 0;    // when a queued move that failed may go out again
+  bool moveRetryArmed_ = false;
+  int queuedAtPly_ = 0;         // the plies on the board when the queued move was sent
+  int httpStatus_ = 0;
+  uint32_t goneAtMs_ = 0;       // when the opponentGone message arrived
+  bool finishSeen_ = false;     // gameFinish arrived while the game stream was still talking
+  uint32_t finishSeenMs_ = 0;
+  GameStatus finishStatus_ = GameStatus::Unknown;
+  Winner finishWinner_ = Winner::None;
 
   int eventStream_ = Transport::kNoStream;
   int gameStream_ = Transport::kNoStream;
+  int challengeStream_ = Transport::kNoStream;  // our kept-alive challenge, while it waits
+  bool challengeAnswered_ = false;              // its {"done":...} line arrived
+  bool cancelWanted_ = false;                   // withdrawn before its id was known: cancel on arrival
+  bool challengeHeard_ = false;                 // its first line came: Lichess took the challenge
   // Declared before the readers on purpose: NdjsonReader's constructor already writes into them.
   char eventLineBuffer_[kEventLineSize] = {};
   char gameLineBuffer_[kGameLineSize] = {};
+  char challengeLineBuffer_[kChallengeLineSize] = {};
   NdjsonReader eventReader_;
   NdjsonReader gameReader_;
+  NdjsonReader challengeReader_;
 
   char username_[kNameSize] = {};
   char gameId_[kGameIdSize] = {};

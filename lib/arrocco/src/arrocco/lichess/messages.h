@@ -70,6 +70,7 @@ struct EventGame {
   bool isMyTurn = false;
   bool rated = false;
   bool compatBoard = false;
+  bool compatKnown = false;  // the event said either way: a missing "compat" is not a "no"
 };
 
 struct ChallengeInfo {

@@ -123,6 +123,11 @@ void Emitter::store(const char* key, size_t bytes, bool ok, uint32_t timeMs) {
   endEvent();
 }
 
+void Emitter::raw(const char* json) {
+  fputs(json, stdout);
+  endEvent();
+}
+
 void Emitter::error(const char* message, const char* detail) {
   fputs("{\"ev\":\"error\",\"msg\":", stdout);
   writeJsonString(message);

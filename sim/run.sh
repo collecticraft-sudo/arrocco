@@ -3,11 +3,12 @@
 # Arrocco simulator — the one command: build what changed, start the server, print the
 # URL. Ctrl-C stops everything (server and app), nothing is left running.
 #
-# usage: sim/run.sh [--no-open] [--port N] [--verbose] [--no-state]
+# usage: sim/run.sh [--no-open] [--port N] [--verbose] [--no-state] [--fake-lichess]
 #   The page opens in the default browser when run from a terminal; --no-open (or a
 #   non-interactive shell) only prints the URL. The board's flash is sim/build/state:
 #   "Restart app" is then a power cut, and the game comes back; --no-state makes every
-#   start a new board.
+#   start a new board. --fake-lichess: the Lichess screens against a pretend Lichess
+#   (sim/host/fake_lichess.h), no network and no account.
 set -euo pipefail
 
 SIM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,7 +20,7 @@ while [ $# -gt 0 ]; do
     --no-open) open_page=no ;;
     --open) open_page=yes ;;
     -h|--help)
-      sed -n '3,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '3,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) server_args+=("$1") ;;
   esac

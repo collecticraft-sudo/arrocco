@@ -10,6 +10,8 @@
 //     set usb 0|1
 //     set scale F          latency scale for present(): 1 = real, 0.25 = fast, 0 = none
 //     frame                emit the last presented frame again ("resend":true)
+//     lichess ...          only with --fake-lichess: drives the pretend Lichess (fake_lichess.h);
+//                          "lichess state" answers with a lichess event
 //     quit
 //
 //   stdout, one JSON object per line ("ev" tells which):
@@ -21,6 +23,8 @@
 //     state  {battery, usb, scale}                     error {msg}      bye {}
 //     store  {key, bytes, ok, t}  the app wrote a blob to the board's flash (only with
 //                                 --state DIR: without it there is no flash to write)
+//     lichess {wifi, linked, login, game, moves, status, ..., log}   what the pretend Lichess
+//                                 saw, for "lichess state" (fake_lichess.h, stateJson)
 #pragma once
 
 #include <stddef.h>
@@ -62,6 +66,8 @@ public:
   void touchIgnored(uint32_t totalCount);
   void state(int batteryPercent, bool usbPowered, double latencyScale);
   void store(const char* key, size_t bytes, bool ok, uint32_t timeMs);
+  // A whole JSON object, written as it is (FakeLichess::stateJson builds it).
+  void raw(const char* json);
   void error(const char* message, const char* detail);
   void bye();
 };
