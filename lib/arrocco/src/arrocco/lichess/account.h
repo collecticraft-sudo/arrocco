@@ -51,6 +51,10 @@ class Account {
   virtual void closePortal() = 0;
   // Something on the screen needs the network: bring the station up, or keep it up a while.
   virtual void wantNetwork() = 0;
+  // The user tapped "Try again" after a failure: a fresh attempt now, not at the end of the
+  // current backoff. (wantNetwork() is called every second by a waiting page and must not do
+  // this: it would restart the attempt before it could ever finish.)
+  virtual void retryNetwork() { wantNetwork(); }
 
   // ---------------------------------------------------------------- the account
   virtual bool linked() = 0;

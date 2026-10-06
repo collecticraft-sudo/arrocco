@@ -505,6 +505,14 @@ def scenario_errors(png):
     check(s.state()["wifi"] == "portal", "the portal is open")
     s.tap(SIDE_BTN(SIDE_BACK), "Back", kind="full")
     check(s.state()["wifi"] != "portal", "and closed again on the way out")
+    # Try again: a fresh attempt now, and this time the network answers.
+    s.li("wifi failed")
+    open_lichess(s, "menu: Lichess, still failing")
+    s.tap(MENU_BTN(WAIT_RETRY), "Try again", frames=0)
+    check(s.state()["wifi"] == "connecting", "a new attempt at once")
+    s.tick(10, "joining", frames=1, kind="partial")
+    s.tick(1600, "online: the Lichess menu", frames=1, kind="full")
+    s.at("lichess", "hub", "through to the menu")
     s.quit()
 
     # A token Lichess no longer knows: 401, and "Link again".

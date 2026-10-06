@@ -19,6 +19,7 @@ class DeviceAccount final : public arrocco::lichess::Account {
   void openPortal() override;
   void closePortal() override;
   void wantNetwork() override;
+  void retryNetwork() override;
   bool linked() override;
   bool beginLogin(char* url, int urlSize) override;
   arrocco::lichess::LoginStatus loginStatus() override;

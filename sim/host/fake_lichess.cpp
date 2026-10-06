@@ -713,6 +713,14 @@ void FakeLichess::wantNetwork() {
   }
 }
 
+void FakeLichess::retryNetwork() {
+  update();
+  if (wifi_ != WifiStatus::Failed) return;
+  wifi_ = WifiStatus::Connecting;
+  wifiDue_ = true;
+  wifiDueMs_ = platform_.millis() + kConnectMs;
+}
+
 bool FakeLichess::linked() {
   update();
   return linked_;

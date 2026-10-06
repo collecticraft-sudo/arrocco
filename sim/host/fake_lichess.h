@@ -78,6 +78,7 @@ class FakeLichess final : public arrocco::lichess::Transport, public arrocco::li
   void openPortal() override;
   void closePortal() override;
   void wantNetwork() override;
+  void retryNetwork() override;
   bool linked() override;
   bool beginLogin(char* url, int urlSize) override;
   arrocco::lichess::LoginStatus loginStatus() override;

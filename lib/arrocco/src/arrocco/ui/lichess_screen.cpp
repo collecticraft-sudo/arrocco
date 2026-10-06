@@ -693,7 +693,7 @@ Action LichessScreen::tapWifiWait(int16_t x, int16_t y) {
   switch (menuButtonAt(x, y)) {
     case kWaitRetry:
       if (s.account.wifiStatus() != WifiStatus::Failed) return Action::none();
-      s.account.wantNetwork();
+      s.account.retryNetwork();
       return Action::none();   // the next status change repaints
     case kWaitSetUp: return show(Page::Wifi);
     case kWaitBack:  return leave();

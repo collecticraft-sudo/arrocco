@@ -43,6 +43,13 @@ void DeviceAccount::closePortal() {
 
 void DeviceAccount::wantNetwork() { net::wifiNeed(); }
 
+// The station state machine retries by itself, with pauses of 3 to 30 s: "Try again" starts a
+// fresh attempt at once instead, the radio off and on again.
+void DeviceAccount::retryNetwork() {
+  if (net::wifiState() == net::WifiState::Failed) net::wifiRadioOff("try again, from the screen");
+  net::wifiNeed();
+}
+
 bool DeviceAccount::linked() { return net::tokenPresent(); }
 
 bool DeviceAccount::beginLogin(char* url, int urlSize) {
