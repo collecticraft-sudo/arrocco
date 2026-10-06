@@ -40,6 +40,7 @@ constexpr uint32_t kOnlineWaitMs = 25000;
 constexpr size_t kRingBytes = 8192; // per stream, in PSRAM
 constexpr size_t kReplyMax = 8192;  // the request task's own landing buffer, in PSRAM
 constexpr size_t kBodyMax = 512;
+constexpr size_t kStreamBodyMax = 200; // a POST stream's form: the friend challenge
 
 // esp-tls + mbedTLS want ~3.5-4.5 KB of stack in the handshake (bundle verification
 // included), and makeClient() puts the URL and the bearer header on top: 6 KB left too
@@ -61,6 +62,7 @@ volatile uint32_t s_streamStackFreeMin = 0;
 // rateLimitWaitS(): volatile so the read is never hoisted out of a poll.
 volatile uint32_t s_gateUntilMs = 0;
 char s_lastError[96] = {};
+int s_lastStreamStatus = 0; // 429 when openStream() refused because of the cool-down
 
 // --- the single request slot -----------------------------------------------------------
 
@@ -88,6 +90,8 @@ struct Stream {
   volatile bool stop = false;
   volatile bool online = false;
   volatile bool ended = false; // dropped, silent, refused or overflowed: readStream -> -1
+  bool post = false;           // a POST stream: one connect, no silence limit
+  char body[kStreamBodyMax] = {};
   char path[112] = {};
   SemaphoreHandle_t lock = nullptr;
   char* ring = nullptr;
@@ -345,6 +349,32 @@ void releaseSlot(Stream& s) {
   s.inUse = false; // last: the slot is only reusable once nothing of it is left
 }
 
+// The "error" of a refused stream's JSON body ({"error":"No such user"}), for lastError().
+void readRefusal(esp_http_client_handle_t c, const char* path, int status) {
+  char reply[192];
+  int got = 0;
+  while (got + 1 < static_cast<int>(sizeof(reply))) {
+    const int r = esp_http_client_read(c, reply + got, static_cast<int>(sizeof(reply)) - 1 - got);
+    if (r <= 0) break;
+    got += r;
+  }
+  reply[got] = '\0';
+  const char* key = strstr(reply, "\"error\":\"");
+  if (key) {
+    key += 9;
+    char text[80];
+    size_t n = 0;
+    while (key[n] && key[n] != '"' && n + 1 < sizeof(text)) {
+      text[n] = key[n];
+      ++n;
+    }
+    text[n] = '\0';
+    setError("%s", text);
+    return;
+  }
+  setError("stream %s: HTTP %d", path, status);
+}
+
 // The wire lock is held only for the connect: a stream that is up must never keep it, or
 // no move could ever be posted.
 esp_http_client_handle_t streamConnect(Stream& s) {
@@ -355,11 +385,23 @@ esp_http_client_handle_t streamConnect(Stream& s) {
   }
   if (!takeLine(kLockWaitMs)) return nullptr;
 
-  esp_http_client_handle_t c = makeClient("GET", s.path, true, true);
+  esp_http_client_handle_t c = makeClient(s.post ? "POST" : "GET", s.path, true, true);
   bool ok = false;
   if (c) {
-    if (esp_http_client_open(c, 0) != ESP_OK) {
+    const int bodyLen = s.post ? static_cast<int>(strlen(s.body)) : 0;
+    if (bodyLen > 0) esp_http_client_set_header(c, "Content-Type", "application/x-www-form-urlencoded");
+    // The form may go out a record at a time, as in perform().
+    bool writeOk = true;
+    const esp_err_t err = esp_http_client_open(c, bodyLen);
+    for (int sent = 0; err == ESP_OK && writeOk && sent < bodyLen;) {
+      const int w = esp_http_client_write(c, s.body + sent, bodyLen - sent);
+      if (w <= 0) writeOk = false;
+      else sent += w;
+    }
+    if (err != ESP_OK) {
       setError("stream connect failed: %s", s.path);
+    } else if (!writeOk) {
+      setError("stream %s: could not send the body", s.path);
     } else if (esp_http_client_fetch_headers(c) < 0) {
       setError("stream: no response headers");
     } else {
@@ -367,7 +409,7 @@ esp_http_client_handle_t streamConnect(Stream& s) {
       if (status == 429) {
         openGate(::millis());
       } else if (status != 200) {
-        setError("stream %s: HTTP %d", s.path, status);
+        readRefusal(c, s.path, status);
       } else {
         ok = true;
         // Long reads from here on: a short timeout keeps the task responsive to stop.
@@ -389,10 +431,12 @@ void streamTask(void* arg) {
 
   esp_http_client_handle_t c = nullptr;
   uint32_t backoff = kBackoffFirstMs;
-  for (uint8_t attempt = 0; attempt < kConnectAttempts && !s.stop; ++attempt) {
+  // A POST is sent once: a second connect would be a second challenge to the same friend.
+  const uint8_t attempts = s.post ? 1 : kConnectAttempts;
+  for (uint8_t attempt = 0; attempt < attempts && !s.stop; ++attempt) {
     c = streamConnect(s);
     if (c) break;
-    if (attempt + 1 == kConnectAttempts) break; // no point sleeping after the last try
+    if (attempt + 1 == attempts) break; // no point sleeping after the last try
     vTaskDelay(pdMS_TO_TICKS(backoff));
     backoff = (backoff * 2 > kBackoffMaxMs) ? kBackoffMaxMs : backoff * 2;
   }
@@ -425,7 +469,8 @@ void streamTask(void* arg) {
         logLine("NET   stream %s: closed by the server", s.path);
         break;
       }
-      if (::millis() - lastByteMs > kStreamSilenceMs) {
+      // A POST stream (the kept-alive challenge) is silent until the friend answers.
+      if (!s.post && ::millis() - lastByteMs > kStreamSilenceMs) {
         logLine("NET   stream %s silent for %lu s: treating it as dead", s.path,
                 static_cast<unsigned long>(kStreamSilenceMs / 1000));
         break;
@@ -562,10 +607,31 @@ void Esp32Transport::endRequest() {
   xSemaphoreGive(s_slotLock);
 }
 
-int Esp32Transport::openStream(const char* path) {
+int Esp32Transport::openStream(const char* path) { return open(path, nullptr); }
+
+int Esp32Transport::openPostStream(const char* path, const char* body) {
+  return open(path, body != nullptr ? body : "");
+}
+
+int Esp32Transport::lastStreamStatus() const { return s_lastStreamStatus; }
+
+int Esp32Transport::open(const char* path, const char* body) {
+  s_lastStreamStatus = 0;
   if (!path) return kNoStream;
   if (!wifiHasCredentials()) {
     setError("no network stored");
+    return kNoStream;
+  }
+  // Inside a 429 cool-down a connect would only be refused again: say 429 at once, and the
+  // client waits its minute (it reopens every two seconds otherwise).
+  const uint32_t now = ::millis();
+  if (gated(now)) {
+    s_lastStreamStatus = 429;
+    setError("rate limited, %lu s left", static_cast<unsigned long>((s_gateUntilMs - now) / 1000UL));
+    return kNoStream;
+  }
+  if (body && strlen(body) >= kStreamBodyMax) {
+    setError("stream body too long");
     return kNoStream;
   }
   wifiNeed(); // the radio may be off: the stream task waits for the station to come up
@@ -576,6 +642,8 @@ int Esp32Transport::openStream(const char* path) {
     s.stop = false;
     s.online = false;
     s.ended = false;
+    s.post = body != nullptr;
+    snprintf(s.body, sizeof(s.body), "%s", body ? body : "");
     s.head = s.tail = s.count = 0;
     if (static_cast<size_t>(snprintf(s.path, sizeof(s.path), "%s", path)) >= sizeof(s.path)) {
       setError("stream path too long"); // never open a truncated, i.e. wrong, path
@@ -595,7 +663,7 @@ int Esp32Transport::openStream(const char* path) {
       releaseSlot(s);
       return kNoStream;
     }
-    logLine("NET   stream %d open on %s", i, s.path);
+    logLine("NET   stream %d open on %s%s", i, s.post ? "POST " : "", s.path);
     return i;
   }
   setError("both stream slots are taken");

@@ -24,6 +24,14 @@
 // with no way for the caller to know. Reopening is the client's decision, above the seam.
 // Backoff does live here, but only for the connect that openStream() starts.
 //
+// One stream is a POST: the friend challenge kept alive (openPostStream). It is connected once,
+// never retried (a retry would be a second challenge), and it is not killed for silence: Lichess
+// says nothing on it until the friend answers. A stream refused with an error body hands its
+// "error" text to lastError() ("No such user").
+//
+// While a 429 cool-down runs, openStream() refuses at once and lastStreamStatus() says 429, so
+// the client waits its minute instead of reopening every two seconds.
+//
 // THE RADIO
 // It is off until something needs it (net_wifi.h). A request or a stream connect first
 // calls wifiWaitOnline() on its own task - up to 25 s while the station associates - and
@@ -76,12 +84,18 @@ class Esp32Transport final : public arrocco::lichess::Transport {
   int openStream(const char* path) override;
   int readStream(int id, char* out, int outSize) override;
   void closeStream(int id) override;
+  bool supportsPostStreams() const override { return true; }
+  int openPostStream(const char* path, const char* body) override;
+  int lastStreamStatus() const override;
 
   // --- diagnostics, not part of the seam ---
   bool streamOnline(int id) const;
   bool streamEnded(int id) const;
   uint32_t rateLimitWaitS() const; // seconds left in the 429 cool-down, 0 when free
-  const char* lastError() const;
+  const char* lastError() const override;
+
+ private:
+  int open(const char* path, const char* body);
 };
 
 Esp32Transport& transport();

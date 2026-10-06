@@ -8,9 +8,13 @@
 //
 // Two ways in, both from docs/decisioni.md:
 //   - OAuth2 PKCE: the board shows a QR, the phone opens lichess.org, Lichess redirects
-//     back to the board on the LAN, the board swaps the code for a token. The QR and the
-//     screens belong to a later step; what is here is the machinery plus a serial path
-//     ('oauth-start') to exercise it.
+//     back to the board on the LAN, the board swaps the code for a token. The QR does not
+//     carry the whole authorize URL (about 270 characters, a 61 x 61 code): it carries the
+//     board's own http://<ip>/login, which answers with a redirect to it (oauthLoginLink).
+//     A code of 29 x 29 modules is twice as easy for a phone to read off e-paper, and the
+//     address is short enough to type when the camera will not. The screens are in
+//     lib/arrocco/src/arrocco/ui/lichess_screen.h; 'oauth-start' does the same from the
+//     serial console.
 //   - a personal token pasted by the user (tokenSave), the documented fallback.
 #pragma once
 #include <Arduino.h>
@@ -45,6 +49,11 @@ enum class OauthState : uint8_t {
 // Needs the station to be online: the phone must be able to reach the board's IP.
 // False when offline or when the URL does not fit.
 bool oauthBegin(char* urlOut, size_t urlSize);
+
+// After oauthBegin(): "http://<the board's IP>/login", the address the QR code carries. The
+// board answers it with a redirect to the authorize URL while the login waits for the phone,
+// and with "expired" otherwise. False when no login is waiting or it does not fit.
+bool oauthLoginLink(char* out, size_t outSize);
 
 void oauthCancel();       // forgets the verifier; the callback then answers "expired"
 // Loop task, every loop: a login still waiting for the phone after 10 minutes is given up
