@@ -15,7 +15,8 @@ I prezzi sono indicativi, non verificati. Niente link: cerca le parole della col
 | 6 | Breakout **MAX17048** (indicatore di carica I2C) | 1 (2 se costa poco) | 3–5 € | La driver board non misura la batteria in nessun modo. Il MAX17048 sta sullo stesso bus I2C del touch (indirizzo 0x36, nessun conflitto), non usa pin in più e si collega con due fili ai pad BAT +/− sul retro della driver board. Scegline uno con **fori passo 2,54 mm**, non solo connettorini JST/Qwiic. |
 | 7 | **Multimetro** economico | 1 | 10–20 € | **Obbligatorio prima di collegare la batteria.** La driver board non ha protezione contro l'inversione di polarità e la batteria è di un venditore AliExpress: se rosso e nero sono scambiati, il chip di ricarica molto probabilmente si brucia. Servono: volt in continua, continuità col cicalino, ohm. Meglio se ha anche la portata µA/mA (servirà per misurare il consumo in sleep). |
 | 8 | Cavetti Dupont **femmina-femmina**, 10 cm e 20 cm | 1 mazzetto da 40 per misura | 2–4 € | Banco: header della driver board ↔ header del FTS02, buzzer. Tienili corti: l'I2C resta a 100 kHz finché i fili sono lunghi. |
-| 9 | Viti **M2** assortite (M2×4, ×6, ×8) e inserti a caldo M2 o viti M2 autofilettanti | 1 scatolina | 3–6 € | La driver board ha 4 fori da circa 2,2 mm (stima da foto, **da misurare col calibro**). Per chiudere la scocca restano gli inserti M3 e le viti M3×6 già previsti nel recap. |
+| 9 | Viti **M2** assortite (M2×4, ×6, ×8) e inserti a caldo M2 o viti M2 autofilettanti | 1 scatolina | 3–6 € | La driver board ha 4 fori da circa 2,2 mm (stima da foto, **da misurare col calibro**). Per chiudere la scocca restano gli inserti M3 e le viti M3×6 già previsti nel recap. *Superato (8 ottobre 2026): misurati Ø 3,0, la scocca finale centra la scheda su perni stampati e si chiude a scatto, quindi niente viti.* |
+| 10 | Cavetto **JST PH 2.0 con interruttore**, versione con mini bilanciere **KCD11** | 1 | 2–4 € | È l'accensione della scocca finale: va fra la batteria e la presa BAT e si infila a scatto nel foro sul fianco. La levetta della driver board, dentro la scocca, non si raggiunge. Vedi `wiring.md` §12. |
 
 ## Opzionale
 
@@ -46,6 +47,7 @@ Se arriva senza pin **non saldare subito**: le misure e la prima accensione del 
 | 7 | `multimetro digitale` con "continuità" o "buzzer" tra le funzioni |
 | 8 | `dupont female female 10cm`, `dupont female female 20cm` |
 | 9 | `M2 screw assortment`, `M2 heat set insert` |
+| 10 | `JST PH2.0 switch cable`, `JST PH 2.0 cable with KCD11 rocker switch`, `interruttore KCD11 cavo JST`. Controlla che il foro richiesto sia circa 13,5 × 8,5–9 mm |
 | opz. | `FFC FPC 24pin 0.5mm extension board`, `FFC cable 24pin 0.5mm type A`, `... type B` |
 
 ## Se non li hai già

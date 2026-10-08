@@ -17,10 +17,14 @@ Nome pubblico: **Arrocco — e-ink chess**, by CollectiCraft. Mai "Atlas" né "r
 ## Hardware
 - Pannello Good Display GDEY075T7-T01 (800×480, UC8179, touch GT911), Seeed ePaper Driver Board 114993558, XIAO ESP32-S3 Plus, LiPo 606090 4000 mAh, buzzer KY-006.
 - Uso **orizzontale da tavolo**: scacchiera a sinistra, colonna laterale a destra.
-- Scocca **sottile con un "mento"**: l'elettronica (12–15 mm con il XIAO montato) sta in una fascia accanto al display, dietro il pannello solo la batteria da 6 mm. La USB-C esce dal bordo del mento.
-- Risveglio **col tocco**; l'interruttore della driver board è lo spento vero. Come funziona il sonno: sezione "Batteria" qui sotto.
+- Scocca **"a televisore"** (definitiva dall'8 ottobre 2026, prima era previsto un "mento"): sul tavolo è piatta, coi flat **piegati a U** sotto il pannello. Davanti la cornice è uguale su tutti e quattro i lati (15 mm). Dietro ci sono due altezze:
+  - verso il bordo dei flat una parte spessa (35,7 mm) con l'elettronica;
+  - verso il bordo opposto una parte sottile (12,5 mm) con la batteria, che poggia su due piedini.
+
+  La USB-C si apre nella parete del gradino, sotto la parte sottile. Si chiude a scatto, senza viti. Misure e immagini: `scocca.md` §7.
+- Risveglio **col tocco**. Lo spento vero, nella scocca, è un **interruttore KCD11 sul fianco** (cavetto JST PH 2.0 sul + della batteria); la levetta della driver board resta sempre su ON. Al banco, senza KCD11, lo spento vero è la levetta. Come funziona il sonno: sezione "Batteria" qui sotto.
 - Percentuale batteria: **MAX17048** I2C (0x36) sullo stesso bus del touch, celle ai pad BAT +/− sul retro della driver board.
-- FTS02 solo al banco. Nella scocca: breakout FPC 6 pin passo 0,5 mm + due pull-up da 4,7 kΩ su SDA e SCL (+ 10 kΩ su RST consigliato).
+- Il FTS02 **sta anche nella scocca**, con i Dupont innestati: lo spessore della parte posteriore lo permette. Il breakout FPC 6 pin passo 0,5 mm (due pull-up da 4,7 kΩ su SDA e SCL, più una 10 kΩ su RST, consigliata) resta l'alternativa per una scocca più sottile.
 - Sulla driver board vanno saldati due header 1×7 nei fori CN1/CN2 (meglio a 90° o fili diretti, per lo spessore).
 
 ### Pin map definitiva (GPIO ESP32-S3, tra parentesi il nome XIAO)
