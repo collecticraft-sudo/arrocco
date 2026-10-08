@@ -1,5 +1,7 @@
 # Scocca — misure per partire
 
+> **8 ottobre 2026: la scocca è finita e stampata.** Le sezioni 1–6 sono le misure di partenza del 22 settembre. Dove dicono una cosa diversa sono superate: la scocca vera, con le misure prese col calibro, è nel [§7](#7-la-scocca-finale-8-ottobre-2026).
+
 Aggiornato il 22 settembre 2026. I pezzi non sono ancora arrivati.
 
 Questo documento serve a impostare il modello **prima** dell'hardware. È diviso in due:
@@ -140,3 +142,53 @@ Inserti filettati M3 per chiudere il guscio, viti M3×6 come da lista pezzi. Per
 ## 6. Cosa ti serve da me
 
 Quando hai le misure dei sei punti sopra, te le riporto qui con i numeri veri e ti dico se qualcosa non torna. Se vuoi, ti genero anche un file con i volumi di ingombro già posizionati, da importare come riferimento nel tuo software.
+
+---
+
+## 7. La scocca finale (8 ottobre 2026)
+
+<p align="center">
+  <img src="media/scocca/davanti.png" width="49%" alt="La scocca vista da davanti: cornice uguale sui quattro lati e lo schermo">
+  <img src="media/scocca/esploso.png" width="49%" alt="Esploso: cornice, pannello, telaio e retro">
+</p>
+<p align="center">
+  <img src="media/scocca/retro.png" width="49%" alt="Il retro: la parte spessa, il gradino con la presa USB-C, la griglia del buzzer e i due piedini">
+  <img src="media/scocca/interruttore.png" width="49%" alt="Il fianco destro con l'interruttore KCD11">
+</p>
+
+Tre pezzi stampati, chiusi a scatto senza viti. I file non sono qui: escono su MakerWorld.
+
+| Pezzo | Cosa fa |
+|---|---|
+| **Cornice** | 194,5 × 129,2 mm, 15 mm visibili su tutti i lati, finestra 164,5 × 99,2. Dietro ha una striscia continua con un cordone che scatta nella scanalatura del retro |
+| **Telaio** | piastra da 0,8 mm subito dietro il pannello: lo protegge da una batteria che si gonfia e porta perni, appoggi e ganci delle schede |
+| **Retro** | parte spessa 35,7 mm per l'elettronica, gradino a 64 mm dal bordo dei flat, parte sottile 12,5 mm per la batteria, due piedini |
+
+**Come è disposto dentro.** I due flat sono piegati a U sotto il pannello. La driver board finisce capovolta, coi componenti verso il tavolo, e la USB-C del XIAO arriva a filo della parete del gradino. Il flat del touch è piegato a 90°: la piastrina del GT911 resta in verticale fra la parete davanti e il FTS02. Il FTS02 e i Dupont restano dentro.
+
+![Vista da sotto, senza retro: batteria, driver board col XIAO, buzzer, FTS02 e interruttore](media/scocca/interno.png)
+
+### Misure prese col calibro
+
+| Cosa | mm |
+|---|---|
+| Vetro | 170,20 × 111,20 × 2,13 (alloggio con 0,15 per lato e 0,2 in spessore) |
+| Bordo nero fuori dall'area bianca | 9,5 dal lato dei flat, 2,7 dal lato opposto |
+| Driver board, fori | Ø 3,0; interasse 20,5 × 16,6 |
+| Foro destro della driver board, flat piegato | 75,6 dal bordo destro del vetro, 20,7 sotto il vetro |
+| Punta della USB-C, flat piegato | 62 dal bordo del vetro; centro a 10,2 dal circuito, più 1 di saldature |
+| Driver board + XIAO + Dupont | 30 di altezza |
+| FTS02 + Dupont | 58,6 × 54,7 × 28 |
+| Levetta ON/OFF della driver board | a 10,2 dal foro vicino al flat, corsa 2 |
+| Batteria 606090 reale | 92 × 60 × 6,2 |
+| Buzzer KY-006 | 19 × 15, fori a 10,2, alto 11,5 con le saldature |
+
+Due correzioni dopo la prima stampa: perni di centraggio della driver board Ø 2,4, e quello dal lato della batteria Ø 2,2 spostato di 0,2 mm. Interasse dei perni 20,7.
+
+### Accensione
+
+La levetta della driver board resta su ON. Si accende e si spegne con un **interruttore a bilanciere KCD11** su cavetto JST PH 2.0, infilato a scatto nel foro 13,6 × 8,8 sul fianco destro: vedi [`wiring.md` §12](wiring.md#12-interruttore-esterno-kcd11).
+
+### Stampa
+
+PLA-CF (Generic PLA-CF), ugello 0,4. Cornice e telaio si stampano a faccia in giù, il retro sul fondo, con supporti ad albero solo dal piatto sotto la parte sottile. Sulla H2D i tre pezzi stanno su un piatto solo: circa 6 h 30 min, 153 g.
