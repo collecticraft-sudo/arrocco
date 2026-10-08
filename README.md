@@ -39,7 +39,7 @@ The first board was assembled and brought up on 6 October 2026. On the real hard
 - it sleeps after five minutes untouched and wakes on a tap, with the radio off unless something needs it;
 - a game survives a power cut: it is saved after every move and offered again as "Resume game".
 
-Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). Next: the case. The offline puzzles are built and tested in the simulator, and wait for their first run on the board.
+Bring-up procedure and measured results: [docs/collaudo.md](docs/collaudo.md). The case was designed and printed on 8 October 2026: see [The case](#the-case). The offline puzzles are built and tested in the simulator, and wait for their first run on the board.
 
 The Lichess screens are written and tested in the simulator against a pretend Lichess (`sim/run.sh --fake-lichess`: no network, no account), but they have not run on the board yet: joining Wi-Fi with a QR code, linking the account with a QR code (OAuth PKCE, or a token pasted on the serial console), playing Lichess Stockfish, challenging a friend, accepting invitations, and the online game with the server's clocks. How it works, and how to try it on the board: [docs/rete.md](docs/rete.md).
 
@@ -53,9 +53,16 @@ The Lichess screens are written and tested in the simulator against a pretend Li
 | LiPo 606090, 4000 mAh, JST PH 2.0 | check polarity with a multimeter before plugging in |
 | MAX17048 fuel gauge breakout | battery percentage, on the touch I2C bus |
 | KY-006 passive buzzer | optional |
-| 6-pin 0.5 mm FPC breakout + two 4.7 kΩ resistors | touch connection inside the case |
-| Good Display ESP32-FTS02 | bench only, as a touch adapter; too tall for the case |
+| Good Display ESP32-FTS02 | touch adapter; it fits in the case, wired with Dupont leads |
+| KCD11 mini rocker switch on a JST PH 2.0 lead | the power switch, on the side of the case; it breaks the battery's + lead, and the driver board's own switch stays on |
 | Two 1 × 7 pin headers, 2.54 mm | soldered into the driver board's CN1/CN2 holes |
+| 6-pin 0.5 mm FPC breakout + two 4.7 kΩ resistors | optional: replaces the FTS02 for a thinner case |
+
+<p align="center">
+  <img src="docs/media/cablaggio.png" width="900" alt="Wiring diagram: the driver board's CN1 and CN2 pins wired to the FTS02 touch adapter and the buzzer, and the battery through the KCD11 switch to the BAT socket">
+</p>
+
+Seven Dupont leads plus the battery lead. The diagram labels are in Italian; the pins are what matters: D4 → A4 (SDA), D5 → A5 (SCL), D6 → A3 (touch reset), D9 → A0 (touch interrupt), D7 → buzzer S, 3V3 → 3.3V, GND → GND, buzzer − → the FTS02's second GND. Never the 5V pins.
 
 Through-hole soldering only. Wiring and pin map: [docs/wiring.md](docs/wiring.md). Shopping list: [docs/da-comprare.md](docs/da-comprare.md). Bring-up procedure: [docs/collaudo.md](docs/collaudo.md).
 
@@ -108,7 +115,20 @@ The CollectiCraft piece set is drawn by hand ([guide, in Italian](docs/pezzi.md)
 
 ## The case
 
-The 3D-printed case is published separately on MakerWorld and is not in this repository. This repository holds the firmware, the wiring and the measurements.
+<p align="center">
+  <img src="docs/media/scocca/davanti.png" width="49%" alt="The case from the front: an even 15 mm frame around the screen">
+  <img src="docs/media/scocca/esploso.png" width="49%" alt="Exploded view: frame, panel, inner plate and back shell">
+</p>
+<p align="center">
+  <img src="docs/media/scocca/retro.png" width="49%" alt="The back: the deep part, the step with the USB-C opening, the buzzer grille and two feet">
+  <img src="docs/media/scocca/interruttore.png" width="49%" alt="The right side with the KCD11 power switch">
+</p>
+
+Three printed parts that snap together, with no screws: a frame, a thin inner plate that keeps the battery off the glass, and a back shell. The board lies flat on the table and the frame is the same 15 mm on every side, so it reads the same from both chairs.
+
+The shell has two depths. Behind the flex-cable edge it is 35.7 mm deep, for the electronics. Behind the rest of the screen it is 12.5 mm, for the battery, and two feet keep that thin part level. The USB-C socket opens in the step between the two, and the power switch sits on the right side. Printed in PLA-CF; the three parts fit on one H2D plate.
+
+The case files are published separately on MakerWorld and are not in this repository. This repository holds the firmware, the wiring and the measurements: [docs/scocca.md](docs/scocca.md) (in Italian) has every measurement taken with the calipers and how the parts sit inside.
 
 ## Licence
 

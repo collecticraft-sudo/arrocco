@@ -4,9 +4,14 @@ Vale la pin map di `decisioni.md`. Questo file sostituisce del tutto il vecchio 
 
 Due montaggi:
 - **Banco**: touch attraverso il FTS02, fili Dupont. Serve a collaudare.
-- **Finale**: touch attraverso un breakout FPC a 6 pin con tre resistenze, fili saldati. È quello che va nella scocca.
+- **Nella scocca**: è lo stesso del banco. La scocca finale (8 ottobre 2026) ha spazio per il FTS02 e per i Dupont innestati, quindi dentro ci va proprio il montaggio da banco, più l'interruttore esterno del §12.
+- **Più sottile**, in alternativa: touch attraverso un breakout FPC a 6 pin con tre resistenze, fili saldati (§7). Serve solo per una scocca più bassa di quella attuale.
 
-Regola generale: **si collega e si scollega tutto a scheda spenta** (USB staccata, interruttore su OFF).
+![Schema dei collegamenti nella scocca: driver board, FTS02, buzzer, batteria con l'interruttore KCD11](media/cablaggio.png)
+
+Lo schema qui sopra è il montaggio nella scocca. Il sorgente vettoriale è [`media/cablaggio.svg`](media/cablaggio.svg).
+
+Regola generale: **si collega e si scollega tutto a scheda spenta** (USB staccata, interruttore KCD11 su OFF).
 
 ## 1. Pin map
 
@@ -170,8 +175,8 @@ Tieni il breakout entro circa 40 mm dal punto in cui il flat esce dal vetro (il 
 | `SDA` | → | bus SDA (`D4`) |
 | `SCL` | → | bus SCL (`D5`) |
 
-- I pad `+` e `−` stanno **prima** dell'interruttore: con la batteria inserita sono sempre sotto tensione, anche su OFF. **Salda con la batteria scollegata.** Rosso al `+`, nero al `−`, e ricontrolla.
-- Per lo stesso motivo il MAX17048 resta alimentato anche a interruttore spento. Il consumo è piccolo ma non zero; il valore non è nel dossier, lo misureremo.
+- I pad `+` e `−` stanno **prima** dell'interruttore della driver board: con la batteria inserita sono sotto tensione anche con la levetta su OFF. **Salda con la batteria scollegata.** Rosso al `+`, nero al `−`, e ricontrolla.
+- Al banco, quindi, il MAX17048 resta alimentato anche a levetta spenta. Il consumo è piccolo ma non zero; il valore non è nel dossier, lo misureremo. Nella scocca invece il KCD11 (§12) sta prima dei pad, e a OFF spegne anche il MAX17048.
 - I breakout non sono tutti uguali. Se il tuo ha un pin in più per la logica (`VIN`, `VCC`, `3V3`, `VIO`...), **mandami una foto prima di saldare**.
 - SDA e SCL sono condivisi col touch. Nel finale i fili si saldano a catena (driver board → MAX17048 → breakout del touch). Al banco servono due "Y": un Dupont tagliato a metà con un terzo filo saldato in mezzo, isolato col termorestringente.
 
@@ -193,14 +198,16 @@ Mai collegare la LiPo **anche** ai pad BAT sotto il XIAO: si scavalca l'interrut
 
 ## 10. Accensione e ricarica
 
-| USB | Interruttore | Scheda | Batteria |
+Nella scocca si accende e si spegne con l'**interruttore KCD11 sul fianco** (§12). La levetta della driver board resta sempre su ON. La tabella vale per il KCD11; senza KCD11, al banco, vale uguale per la levetta della driver board.
+
+| USB | KCD11 | Scheda | Batteria |
 |---|---|---|---|
 | collegata | OFF | **accesa** (va a USB) | isolata, **non si carica** |
 | collegata | ON | accesa | **in carica** |
 | staccata | ON | accesa a batteria | si scarica |
-| staccata | OFF | **spenta davvero** | ferma (resta vivo solo il MAX17048) |
+| staccata | OFF | **spenta davvero** | ferma, e con lei anche il MAX17048 |
 
-- **Per caricare: interruttore su ON.** Con la USB collegata la scheda è sempre accesa, qualunque sia la posizione dell'interruttore.
+- **Per caricare: KCD11 su ON.** Con la USB collegata la scheda è sempre accesa, qualunque sia la posizione dell'interruttore.
 - Carica a circa 0,5 A fissi: la 4000 mAh ci mette **9–10 ore**. Si carica di notte.
 - Non c'è nessun LED di carica e il firmware non può sapere se la batteria sta caricando. Il LED rosso del XIAO può accendersi per una trentina di secondi a ogni accensione: non vuol dire niente.
 - A batteria scarica (circa 2,8 V) la scheda si spegne di colpo, senza avviso. Con il MAX17048 il firmware può avvisare prima.
@@ -229,3 +236,22 @@ Con la USB collegata la scheda dorme lo stesso: la porta seriale sparisce dal Ma
 ## 11. Pin liberi
 
 Sugli 11 pin laterali del XIAO non avanza niente. Il Plus ha in più 9 mezzi-fori passo 1,27 mm sul bordo, in mezzo ai pin normali (D11–D19 = GPIO 38–42, 10, 13, 12, 11): ci si arriva solo saldando un filo sottile di lato. Non sono previsti in questo progetto.
+
+## 12. Interruttore esterno (KCD11)
+
+Nella scocca la levetta della driver board non si raggiunge. Per questo l'accensione passa a un interruttore esterno sul fianco destro della parte spessa.
+
+| Cosa | Dettaglio |
+|---|---|
+| Pezzo | cavetto **JST PH 2.0 con interruttore**, versione con mini bilanciere **KCD11** (10 × 15 mm). Si compra già fatto: spina da un lato, presa dall'altro, nessuna saldatura |
+| Dove va | fra la spina della batteria e la presa `BAT` della driver board. Interrompe il **+** della batteria |
+| Montaggio | si infila a scatto nel foro **13,6 × 8,8 mm** sul fianco destro della scocca, lato lungo in orizzontale |
+| Levetta della driver board | **sempre su ON**. Se resta su OFF il KCD11 non accende niente e la batteria non si carica |
+
+Prima di chiudere la scocca:
+
+1. Con KCD11 su **OFF**, fai la procedura della polarità del §9, misurando sulla **spina del cavetto**, cioè quella che entra nella presa `BAT`.
+2. Metti il KCD11 su **ON** e misura di nuovo sulla stessa spina: deve dare lo stesso valore positivo della batteria. Con KCD11 su OFF deve dare circa 0 V.
+3. Solo ora inserisci la spina nella presa `BAT`.
+
+Con il KCD11 su OFF la batteria è isolata da tutto, anche dai pad `+` e `−` sul retro della driver board. Il MAX17048, se c'è, si spegne con lei: a OFF la scocca non consuma niente.
